@@ -21,6 +21,17 @@ func newMachine(ctx context.Context, binaryPath string, cfg machineConfig) (mach
 		},
 	}
 
+	// Attach the cloud-init NoCloud seed disk so the guest can auto-configure
+	// networking via DHCP. cloud-init detects it by the "cidata" filesystem label.
+	if cfg.cloudInitPath != "" {
+		drives = append(drives, fcmodels.Drive{
+			DriveID:      firecracker.String("cidata"),
+			PathOnHost:   firecracker.String(cfg.cloudInitPath),
+			IsRootDevice: firecracker.Bool(false),
+			IsReadOnly:   firecracker.Bool(true),
+		})
+	}
+
 	var networkInterfaces firecracker.NetworkInterfaces
 	if cfg.tapName != "" {
 		networkInterfaces = firecracker.NetworkInterfaces{

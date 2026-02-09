@@ -27,7 +27,12 @@ func main() {
 		log.Fatalf("image store: %v", err)
 	}
 
-	manager := vmm.NewManager(cfg, imageStore)
+	manager, err := vmm.NewManager(cfg, imageStore)
+	if err != nil {
+		log.Fatalf("vm manager: %v", err)
+	}
+	defer manager.Shutdown()
+
 	server := api.NewServer(cfg, imageStore, manager)
 
 	httpServer := &http.Server{

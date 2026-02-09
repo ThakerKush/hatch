@@ -63,6 +63,7 @@ type createVMRequest struct {
 	EnableNetwork *bool  `json:"enable_network"`
 	GuestIP       string `json:"guest_ip"`
 	GuestMAC      string `json:"guest_mac"`
+	UserData      string `json:"user_data"`
 }
 
 func (r createVMRequest) Validate() error {
@@ -85,5 +86,6 @@ func (r createVMRequest) ToOptions(cfg config.Config) vmm.CreateOptions {
 		EnableNetwork: enableNetwork,
 		GuestIP:       r.GuestIP,
 		GuestMAC:      r.GuestMAC,
+		UserData:      r.UserData,
 	}
 }

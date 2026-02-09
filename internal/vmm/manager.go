@@ -33,6 +33,7 @@ type VM struct {
 	WorkDir    string    `json:"-"`
 	TapName    string    `json:"tap_name,omitempty"`
 	GuestIP    string    `json:"guest_ip,omitempty"`
+	GuestMAC   string    `json:"guest_mac,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
@@ -46,27 +47,36 @@ type CreateOptions struct {
 	GuestIP        string
 	GuestMAC       string
 	InstanceSocket string
+	UserData       string
 }
 
 type Manager struct {
 	cfg         config.Config
 	images      *store.ImageStore
 	allocator   *IPAllocator
+	dhcp        *DHCPServer
 	mu          sync.RWMutex
 	vms         map[string]*VM
 	machines    map[string]machineHandle
 	bridgeReady bool
 }
 
-func NewManager(cfg config.Config, images *store.ImageStore) *Manager {
+func NewManager(cfg config.Config, images *store.ImageStore) (*Manager, error) {
 	allocator := NewIPAllocator(cfg.BridgeCIDR)
+
+	dhcp, err := NewDHCPServer(cfg.BridgeName, cfg.BridgeCIDR, cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("init DHCP server: %w", err)
+	}
+
 	return &Manager{
 		cfg:       cfg,
 		images:    images,
 		allocator: allocator,
+		dhcp:      dhcp,
 		vms:       make(map[string]*VM),
 		machines:  make(map[string]machineHandle),
-	}
+	}, nil
 }
 
 func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*VM, error) {
@@ -90,8 +100,8 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*VM, 
 		return nil, err
 	}
 
-	var tapName string
-	var guestIP string
+	var tapName, guestIP, macAddr, cloudInitPath string
+
 	if opts.EnableNetwork {
 		if err := m.ensureBridge(ctx); err != nil {
 			return nil, err
@@ -102,6 +112,7 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*VM, 
 			return nil, err
 		}
 
+		// Allocate IP
 		if opts.GuestIP != "" {
 			guestIP = opts.GuestIP
 		} else {
@@ -112,6 +123,35 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*VM, 
 			}
 			guestIP = ip.String()
 		}
+
+		// Resolve MAC address
+		macAddr = opts.GuestMAC
+		if macAddr == "" {
+			macAddr = randomMAC()
+		}
+
+		// Register a static DHCP reservation so the guest receives exactly this IP.
+		if err := m.dhcp.AddHost(macAddr, guestIP); err != nil {
+			_ = DeleteTap(ctx, tapName)
+			if ip := net.ParseIP(guestIP); ip != nil {
+				m.allocator.Release(ip)
+			}
+			return nil, fmt.Errorf("add DHCP reservation: %w", err)
+		}
+
+		// Build a cloud-init NoCloud seed disk. cloud-init in the guest will
+		// auto-detect it (label "cidata") and configure DHCP on the NIC that
+		// matches this MAC address.
+		ciPath, err := CreateCloudInitDisk(ctx, vmDir, vmID, macAddr, opts.UserData)
+		if err != nil {
+			_ = m.dhcp.RemoveHost(macAddr)
+			_ = DeleteTap(ctx, tapName)
+			if ip := net.ParseIP(guestIP); ip != nil {
+				m.allocator.Release(ip)
+			}
+			return nil, fmt.Errorf("create cloud-init disk: %w", err)
+		}
+		cloudInitPath = ciPath
 	}
 
 	bootArgs := image.BootArgs
@@ -130,6 +170,7 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*VM, 
 		WorkDir:    vmDir,
 		TapName:    tapName,
 		GuestIP:    guestIP,
+		GuestMAC:   macAddr,
 		CreatedAt:  time.Now().UTC(),
 		UpdatedAt:  time.Now().UTC(),
 	}
@@ -141,25 +182,18 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*VM, 
 	vcpus := int64(clampInt(opts.VCPUCount, 1, 32, m.cfg.DefaultVCPU))
 	mem := int64(clampInt(opts.MemMib, 128, 65536, m.cfg.DefaultMemMib))
 
-	var macAddr string
-	if opts.EnableNetwork && tapName != "" {
-		macAddr = opts.GuestMAC
-		if macAddr == "" {
-			macAddr = randomMAC()
-		}
-	}
-
 	machine, err := newMachine(ctx, m.cfg.FirecrackerBinary, machineConfig{
-		socketPath: socketPath,
-		kernelPath: image.KernelPath,
-		kernelArgs: bootArgs,
-		rootfsPath: image.RootfsPath,
-		vmID:       vmID,
-		vcpuCount:  vcpus,
-		memMib:     mem,
-		tapName:    tapName,
-		macAddr:    macAddr,
-		logDir:     vmDir,
+		socketPath:    socketPath,
+		kernelPath:    image.KernelPath,
+		kernelArgs:    bootArgs,
+		rootfsPath:    image.RootfsPath,
+		vmID:          vmID,
+		vcpuCount:     vcpus,
+		memMib:        mem,
+		tapName:       tapName,
+		macAddr:       macAddr,
+		logDir:        vmDir,
+		cloudInitPath: cloudInitPath,
 	})
 	if err != nil {
 		m.markError(vm.ID, err)
@@ -255,6 +289,12 @@ func (m *Manager) ensureBridge(ctx context.Context) error {
 	if err := EnsureBridge(ctx, m.cfg.BridgeName, m.cfg.BridgeCIDR); err != nil {
 		return err
 	}
+
+	// Start the DHCP server on the bridge so guests can obtain their IPs automatically.
+	if err := m.dhcp.Start(); err != nil {
+		return fmt.Errorf("start DHCP server: %w", err)
+	}
+
 	m.bridgeReady = true
 	return nil
 }
@@ -273,6 +313,11 @@ func (m *Manager) cleanupResources(ctx context.Context, vm *VM, releaseIP bool) 
 		_ = DeleteTap(ctx, vm.TapName)
 	}
 
+	// Remove the DHCP reservation so the IP can be reused.
+	if vm.GuestMAC != "" {
+		_ = m.dhcp.RemoveHost(vm.GuestMAC)
+	}
+
 	if releaseIP && vm.GuestIP != "" {
 		if ip := net.ParseIP(vm.GuestIP); ip != nil {
 			m.allocator.Release(ip)
@@ -281,6 +326,13 @@ func (m *Manager) cleanupResources(ctx context.Context, vm *VM, releaseIP bool) 
 
 	if vm.WorkDir != "" {
 		_ = os.RemoveAll(vm.WorkDir)
+	}
+}
+
+// Shutdown stops long-running resources owned by the manager (e.g. dnsmasq).
+func (m *Manager) Shutdown() {
+	if m.dhcp != nil {
+		m.dhcp.Stop()
 	}
 }
 
@@ -324,14 +376,15 @@ type machineHandle interface {
 }
 
 type machineConfig struct {
-	socketPath string
-	kernelPath string
-	kernelArgs string
-	rootfsPath string
-	vmID       string
-	vcpuCount  int64
-	memMib     int64
-	tapName    string
-	macAddr    string
-	logDir     string
+	socketPath    string
+	kernelPath    string
+	kernelArgs    string
+	rootfsPath    string
+	vmID          string
+	vcpuCount     int64
+	memMib        int64
+	tapName       string
+	macAddr       string
+	logDir        string
+	cloudInitPath string // NoCloud seed disk (attached as /dev/vdb)
 }
