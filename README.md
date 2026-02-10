@@ -1,102 +1,173 @@
-# Hatch (V0)
+# Hatch
 
-Hatch is a single-tenant Firecracker spawner. The control plane runs on a Linux host with KVM and manages multiple microVMs via the Firecracker API.
+Hatch is a single-tenant Firecracker control plane for spinning up microVMs — designed for AI agent workloads. It provides a REST API for VM lifecycle management, a subdomain-based reverse proxy with wake-on-request, automatic snapshot/restore for idle VMs, and reusable VM templates.
 
-## Quick start (Linux host)
+## Features
 
-1) Install prerequisites:
+- **VM lifecycle** — create, stop, delete microVMs via REST API
+- **Automatic networking** — bridge + TAP + DHCP + cloud-init, fully automated
+- **Templates** — reusable VM configs (image + cloud-init + resource defaults)
+- **Reverse proxy** — subdomain-based routing (`agent.hatch.local` → VM guest IP)
+- **Wake-on-request** — snapshotted VMs auto-restore when traffic arrives
+- **Snapshot / restore** — Firecracker native snapshots stored in S3-compatible storage
+- **Idle detection** — VMs with no proxy traffic get auto-snapshotted after a configurable timeout
+- **PostgreSQL** — persistent state for VMs, images, templates, snapshots, routes
+- **Docker Compose** — one command to run Hatch + Postgres + MinIO
 
+## Quick start
+
+### Docker Compose (recommended)
+
+On your Linux VPS with KVM and Firecracker installed:
+
+```bash
+git clone <your-repo> && cd hatch
+docker compose up -d
 ```
-# Firecracker
-# Ensure the firecracker binary is in PATH (or set HATCH_FIRECRACKER_BIN).
 
-# dnsmasq (DHCP server for microVMs)
-sudo apt install dnsmasq-base   # Debian/Ubuntu
-sudo dnf install dnsmasq        # Fedora/RHEL
+This starts:
+- **Hatch** daemon (API on `:8080`, proxy on `:9090`)
+- **PostgreSQL** on `:5432`
+- **MinIO** (S3-compatible) on `:9000` (console on `:9001`)
 
-# e2fsprogs ≥ 1.43 (for mkfs.ext4 -d, used to build cloud-init disks)
-# Already installed on most distros.
-```
+### Manual (Linux host)
 
-2) Prepare a guest rootfs image **with cloud-init installed**. Hatch injects a
-   NoCloud seed disk into each VM, so cloud-init in the guest will automatically
-   configure networking via DHCP. Most cloud images (Ubuntu, Debian, Alpine with
-   `cloud-init`) work out of the box.
+Prerequisites: `firecracker`, `dnsmasq-base`, `e2fsprogs`, a running PostgreSQL.
 
-3) Run the server:
-
-```
+```bash
+export DATABASE_URL="postgres://hatch:hatch@localhost:5432/hatch?sslmode=disable"
 go run ./cmd/hatchd
 ```
 
-4) Register an image:
+## API usage
 
-```
+### Register an image
+
+```bash
 curl -sS -X POST localhost:8080/images \
   -H 'content-type: application/json' \
   -d '{
     "kernel_path": "/path/to/vmlinux.bin",
-    "rootfs_path": "/path/to/rootfs.ext4",
-    "boot_args": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw rootfstype=ext4"
+    "rootfs_path": "/path/to/rootfs.ext4"
   }'
 ```
 
-5) Create a VM:
+### Create a template
 
+```bash
+curl -sS -X POST localhost:8080/templates \
+  -H 'content-type: application/json' \
+  -d '{
+    "name": "vscode-agent",
+    "image_id": "<image-id>",
+    "vcpu_count": 2,
+    "mem_mib": 1024,
+    "user_data": "#cloud-config\npackages:\n  - python3\nruncmd:\n  - curl -fsSL https://code-server.dev/install.sh | sh"
+  }'
 ```
+
+### Create a VM (from template)
+
+```bash
 curl -sS -X POST localhost:8080/vms \
   -H 'content-type: application/json' \
-  -d '{"image_id":"<image-id>"}'
+  -d '{"template_id": "<template-id>"}'
 ```
+
+### Set up a proxy route
+
+```bash
+curl -sS -X POST localhost:8080/vms/<vm-id>/routes \
+  -H 'content-type: application/json' \
+  -d '{"subdomain": "my-agent", "target_port": 8080}'
+```
+
+Now `http://my-agent.hatch.local:9090/` forwards to the VM's port 8080.
+
+### Snapshot / restore
+
+```bash
+# Manual snapshot
+curl -sS -X POST localhost:8080/vms/<vm-id>/snapshot
+
+# Manual restore
+curl -sS -X POST localhost:8080/vms/<vm-id>/restore
+
+# List snapshots
+curl -sS localhost:8080/vms/<vm-id>/snapshots
+```
+
+Idle VMs with proxy routes are auto-snapshotted after `HATCH_IDLE_TIMEOUT` (default 10m). When a request arrives for a snapshotted VM, the proxy auto-restores it.
+
+## API endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/healthz` | Health check with VM/route counts |
+| POST | `/images` | Register an image |
+| GET | `/images` | List images |
+| GET | `/images/{id}` | Get image |
+| DELETE | `/images/{id}` | Delete image |
+| POST | `/templates` | Create template |
+| GET | `/templates` | List templates |
+| GET | `/templates/{id}` | Get template |
+| DELETE | `/templates/{id}` | Delete template |
+| POST | `/vms` | Create VM (accepts `image_id` or `template_id`) |
+| GET | `/vms` | List VMs |
+| GET | `/vms/{id}` | Get VM |
+| DELETE | `/vms/{id}` | Delete VM |
+| POST | `/vms/{id}/stop` | Stop VM |
+| POST | `/vms/{id}/snapshot` | Snapshot VM to S3 |
+| POST | `/vms/{id}/restore` | Restore VM from latest snapshot |
+| GET | `/vms/{id}/snapshots` | List snapshots for a VM |
+| POST | `/vms/{id}/routes` | Create proxy route |
+| GET | `/vms/{id}/routes` | List proxy routes |
+| DELETE | `/routes/{id}` | Delete proxy route |
 
 ## Networking
 
-Hatch creates a Linux bridge (`fcbr0` by default) and attaches per-VM tap devices to it.
+Hatch creates a Linux bridge (`fcbr0` by default) and attaches per-VM TAP devices.
 
-**Automatic IP assignment via DHCP + cloud-init:**
+1. On first VM, Hatch starts `dnsmasq` DHCP on the bridge.
+2. Each VM gets an allocated IP with a static DHCP reservation (MAC -> IP).
+3. A cloud-init NoCloud seed disk configures DHCP on the guest NIC.
+4. Guest boots, cloud-init runs, network is up — fully automatic.
 
-1. When the first VM is created, Hatch starts a `dnsmasq` DHCP server on the bridge.
-2. For each VM, Hatch allocates an IP from the bridge subnet and creates a static
-   DHCP reservation (MAC → IP) so the guest receives exactly the IP shown in the API
-   response.
-3. A cloud-init NoCloud seed disk (labelled `cidata`) is generated per-VM and attached
-   as a second Firecracker drive (`/dev/vdb`). The seed contains a network-config
-   that tells cloud-init to use DHCP on the NIC matching the VM's MAC address.
-4. The guest boots, cloud-init discovers the seed disk, and the DHCP client obtains
-   the assigned IP — fully automatic, no manual guest configuration needed.
+For internet access from VMs:
 
-**Requirements:**
-
-- `dnsmasq` (or `dnsmasq-base`) installed on the host.
-- The guest rootfs must have **cloud-init** installed and enabled.
-- `e2fsprogs` ≥ 1.43 on the host (for `mkfs.ext4 -d`).
-
-**Optional – internet access for VMs:**
-
-If you want VMs to reach the internet through the host, enable IP forwarding
-and masquerading:
-
-```
+```bash
 sudo sysctl -w net.ipv4.ip_forward=1
 sudo iptables -t nat -A POSTROUTING -s 172.16.0.0/24 ! -o fcbr0 -j MASQUERADE
 ```
 
-## Config
+## Image strategy
 
-Environment variables:
+Hatch images are simple pointers to kernel + rootfs files. Hatch does not build images.
 
-- `HATCH_HTTP_ADDR` (default `:8080`)
-- `HATCH_DATA_DIR` (default `./data`)
-- `HATCH_FIRECRACKER_BIN` (default `firecracker`)
-- `HATCH_BRIDGE_NAME` (default `fcbr0`)
-- `HATCH_BRIDGE_CIDR` (default `172.16.0.1/24`)
-- `HATCH_DEFAULT_VCPU` (default `1`)
-- `HATCH_DEFAULT_MEM_MIB` (default `256`)
-- `HATCH_DEFAULT_BOOT_ARGS` (default kernel args shown above)
+- **Day 1:** Build rootfs externally (Dockerfile-to-ext4, debootstrap, cloud image download) and register via `POST /images`.
+- **Day 2:** Create templates that bundle image + cloud-init + defaults. One API call spins up a pre-configured VM.
+- **Day 3:** Boot a VM from a template, wait for cloud-init, snapshot it. Restore copies for instant boot with everything pre-installed (golden snapshot pattern).
 
-## Dev workflow
+## Configuration
 
-- Develop locally on macOS.
-- `git push` to your repo.
-- SSH into the Linux host, `git pull`, and run `go run ./cmd/hatchd`.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HATCH_HTTP_ADDR` | `:8080` | API listen address |
+| `HATCH_PROXY_ADDR` | `:9090` | Reverse proxy listen address |
+| `HATCH_PROXY_BASE_DOMAIN` | `hatch.local` | Base domain for subdomain routing |
+| `HATCH_PROXY_WAKE_TIMEOUT` | `60s` | Max time to wait for VM restore |
+| `HATCH_DATA_DIR` | `./data` | Local data directory |
+| `DATABASE_URL` | `postgres://hatch:hatch@localhost:5432/hatch?sslmode=disable` | PostgreSQL connection string |
+| `HATCH_FIRECRACKER_BIN` | `firecracker` | Firecracker binary path |
+| `HATCH_BRIDGE_NAME` | `fcbr0` | Bridge interface name |
+| `HATCH_BRIDGE_CIDR` | `172.16.0.1/24` | Bridge IP/subnet |
+| `HATCH_DEFAULT_VCPU` | `1` | Default vCPUs per VM |
+| `HATCH_DEFAULT_MEM_MIB` | `256` | Default memory (MiB) per VM |
+| `HATCH_S3_ENDPOINT` | | S3 endpoint (e.g. `http://localhost:9000` for MinIO) |
+| `HATCH_S3_BUCKET` | | S3 bucket for snapshots |
+| `HATCH_S3_REGION` | `us-east-1` | S3 region |
+| `HATCH_S3_ACCESS_KEY` | | S3 access key |
+| `HATCH_S3_SECRET_KEY` | | S3 secret key |
+| `HATCH_IDLE_CHECK_INTERVAL` | `1m` | How often to check for idle VMs |
+| `HATCH_IDLE_TIMEOUT` | `10m` | Idle time before auto-snapshot |
 
