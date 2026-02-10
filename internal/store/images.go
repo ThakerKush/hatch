@@ -1,14 +1,12 @@
 package store
 
 import (
-	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
-	"sync"
+	"database/sql"
+	"fmt"
 	"time"
 )
 
+// Image represents a registered VM base image (kernel + rootfs).
 type Image struct {
 	ID         string    `json:"id"`
 	KernelPath string    `json:"kernel_path"`
@@ -17,80 +15,62 @@ type Image struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-type ImageStore struct {
-	path   string
-	mu     sync.RWMutex
-	images map[string]Image
-}
-
-func ImagesPath(dataDir string) string {
-	return filepath.Join(dataDir, "images.json")
-}
-
-func LoadImages(path string) (*ImageStore, error) {
-	store := &ImageStore{
-		path:   path,
-		images: make(map[string]Image),
-	}
-
-	data, err := os.ReadFile(path)
+// CreateImage inserts a new image record.
+func (d *DB) CreateImage(img Image) error {
+	_, err := d.db.Exec(
+		`INSERT INTO images (id, kernel_path, rootfs_path, boot_args, created_at)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		img.ID, img.KernelPath, img.RootfsPath, img.BootArgs, img.CreatedAt,
+	)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return store, nil
+		return fmt.Errorf("create image: %w", err)
+	}
+	return nil
+}
+
+// GetImage retrieves an image by ID. Returns nil if not found.
+func (d *DB) GetImage(id string) (*Image, error) {
+	row := d.db.QueryRow(
+		`SELECT id, kernel_path, rootfs_path, boot_args, created_at FROM images WHERE id = $1`, id,
+	)
+	img := &Image{}
+	err := row.Scan(&img.ID, &img.KernelPath, &img.RootfsPath, &img.BootArgs, &img.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get image: %w", err)
+	}
+	return img, nil
+}
+
+// ListImages returns all registered images.
+func (d *DB) ListImages() ([]Image, error) {
+	rows, err := d.db.Query(
+		`SELECT id, kernel_path, rootfs_path, boot_args, created_at FROM images ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list images: %w", err)
+	}
+	defer rows.Close()
+
+	var images []Image
+	for rows.Next() {
+		var img Image
+		if err := rows.Scan(&img.ID, &img.KernelPath, &img.RootfsPath, &img.BootArgs, &img.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan image: %w", err)
 		}
-		return nil, err
+		images = append(images, img)
 	}
-
-	if len(data) == 0 {
-		return store, nil
-	}
-
-	if err := json.Unmarshal(data, &store.images); err != nil {
-		return nil, err
-	}
-
-	return store, nil
+	return images, rows.Err()
 }
 
-func (s *ImageStore) Add(image Image) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.images[image.ID] = image
-	return s.save()
-}
-
-func (s *ImageStore) Get(id string) (Image, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	image, ok := s.images[id]
-	return image, ok
-}
-
-func (s *ImageStore) List() []Image {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	images := make([]Image, 0, len(s.images))
-	for _, image := range s.images {
-		images = append(images, image)
-	}
-	return images
-}
-
-func (s *ImageStore) Delete(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.images[id]; !ok {
-		return false
-	}
-	delete(s.images, id)
-	_ = s.save()
-	return true
-}
-
-func (s *ImageStore) save() error {
-	data, err := json.MarshalIndent(s.images, "", "  ")
+// DeleteImage removes an image by ID. Returns true if a row was deleted.
+func (d *DB) DeleteImage(id string) (bool, error) {
+	res, err := d.db.Exec(`DELETE FROM images WHERE id = $1`, id)
 	if err != nil {
-		return err
+		return false, fmt.Errorf("delete image: %w", err)
 	}
-	return os.WriteFile(s.path, data, 0o644)
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
