@@ -2,7 +2,7 @@ package api
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -12,35 +12,59 @@ import (
 	"github.com/ThakerKush/Hatch/internal/vmm"
 )
 
+// Server exposes the Hatch REST API.
 type Server struct {
-	cfg    config.Config
-	images *store.ImageStore
-	vmm    *vmm.Manager
+	cfg config.Config
+	db  *store.DB
+	vmm *vmm.Manager
 }
 
-func NewServer(cfg config.Config, images *store.ImageStore, manager *vmm.Manager) *Server {
+// NewServer creates an API server backed by the given database and VM manager.
+func NewServer(cfg config.Config, db *store.DB, manager *vmm.Manager) *Server {
 	return &Server{
-		cfg:    cfg,
-		images: images,
-		vmm:    manager,
+		cfg: cfg,
+		db:  db,
+		vmm: manager,
 	}
 }
 
+// Routes returns the HTTP handler with all API routes registered.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", s.handleHealth)
+
+	// Images
 	mux.HandleFunc("/images", s.handleImages)
 	mux.HandleFunc("/images/", s.handleImage)
+
+	// VMs
 	mux.HandleFunc("/vms", s.handleVMs)
 	mux.HandleFunc("/vms/", s.handleVM)
+
+	// Templates
+	mux.HandleFunc("/templates", s.handleTemplates)
+	mux.HandleFunc("/templates/", s.handleTemplate)
+
+	// Routes (top-level delete)
+	mux.HandleFunc("/routes/", s.handleRouteDelete)
 
 	return withLogging(mux)
 }
 
+// ──────────────────────────── Health ────────────────────────────
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	vms, _ := s.db.ListVMs()
+	routes, _ := s.db.ListAllRoutes()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "ok",
+		"vm_count":    len(vms),
+		"route_count": len(routes),
+	})
 }
+
+// ──────────────────────────── Images ────────────────────────────
 
 func (s *Server) handleImages(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -55,13 +79,18 @@ func (s *Server) handleImages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		image := req.ToImage(s.cfg)
-		if err := s.images.Add(image); err != nil {
+		if err := s.db.CreateImage(image); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, image)
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.images.List())
+		images, err := s.db.ListImages()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, images)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, errMethodNotAllowed)
 	}
@@ -76,14 +105,23 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		image, ok := s.images.Get(id)
-		if !ok {
+		image, err := s.db.GetImage(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if image == nil {
 			writeError(w, http.StatusNotFound, errNotFound)
 			return
 		}
 		writeJSON(w, http.StatusOK, image)
 	case http.MethodDelete:
-		if !s.images.Delete(id) {
+		deleted, err := s.db.DeleteImage(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !deleted {
 			writeError(w, http.StatusNotFound, errNotFound)
 			return
 		}
@@ -92,6 +130,8 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, errMethodNotAllowed)
 	}
 }
+
+// ──────────────────────────── VMs ────────────────────────────
 
 func (s *Server) handleVMs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -104,6 +144,32 @@ func (s *Server) handleVMs(w http.ResponseWriter, r *http.Request) {
 		if err := req.Validate(); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
+		}
+
+		// If a template_id is provided, resolve its defaults.
+		if req.TemplateID != "" {
+			tpl, err := s.db.GetTemplate(req.TemplateID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if tpl == nil {
+				writeError(w, http.StatusBadRequest, errNotFound)
+				return
+			}
+			// Template values are defaults; explicit request values override.
+			if req.ImageID == "" {
+				req.ImageID = tpl.ImageID
+			}
+			if req.VCPUCount == 0 {
+				req.VCPUCount = tpl.VCPUCount
+			}
+			if req.MemMib == 0 {
+				req.MemMib = tpl.MemMib
+			}
+			if req.UserData == "" {
+				req.UserData = tpl.UserData
+			}
 		}
 
 		opts := req.ToOptions(s.cfg)
@@ -129,6 +195,8 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := parts[0]
+
+	// /vms/{id}
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodGet:
@@ -152,6 +220,7 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 
 	action := parts[1]
 	switch {
+	// POST /vms/{id}/stop
 	case r.Method == http.MethodPost && action == "stop":
 		vm, err := s.vmm.Stop(r.Context(), id)
 		if err != nil {
@@ -159,16 +228,181 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, vm)
+
+	// POST /vms/{id}/snapshot
+	case r.Method == http.MethodPost && action == "snapshot":
+		snap, err := s.vmm.Snapshot(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, snap)
+
+	// POST /vms/{id}/restore
+	case r.Method == http.MethodPost && action == "restore":
+		vm, err := s.vmm.Restore(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, vm)
+
+	// GET /vms/{id}/snapshots
+	case r.Method == http.MethodGet && action == "snapshots":
+		snaps, err := s.db.ListSnapshots(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, snaps)
+
+	// POST /vms/{id}/routes
+	case r.Method == http.MethodPost && action == "routes":
+		var req createRouteRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := req.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		// Verify VM exists.
+		if _, ok := s.vmm.Get(id); !ok {
+			writeError(w, http.StatusNotFound, errNotFound)
+			return
+		}
+		route := req.ToRoute(id)
+		if err := s.db.CreateRoute(route); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, route)
+
+	// GET /vms/{id}/routes
+	case r.Method == http.MethodGet && action == "routes":
+		routes, err := s.db.ListRoutesByVM(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, routes)
+
 	default:
 		writeError(w, http.StatusNotFound, errNotFound)
 	}
 }
 
+// ──────────────────────────── Templates ────────────────────────────
+
+func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		var req createTemplateRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := req.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		// Verify the image exists.
+		img, err := s.db.GetImage(req.ImageID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if img == nil {
+			writeError(w, http.StatusBadRequest, errNotFound)
+			return
+		}
+		tpl := req.ToTemplate(s.cfg)
+		if err := s.db.CreateTemplate(tpl); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, tpl)
+	case http.MethodGet:
+		templates, err := s.db.ListTemplates()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, templates)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleTemplate(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/templates/")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, errInvalidPath)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		tpl, err := s.db.GetTemplate(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if tpl == nil {
+			writeError(w, http.StatusNotFound, errNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, tpl)
+	case http.MethodDelete:
+		deleted, err := s.db.DeleteTemplate(id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !deleted {
+			writeError(w, http.StatusNotFound, errNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, errMethodNotAllowed)
+	}
+}
+
+// ──────────────────────────── Routes (top-level delete) ────────────────────────
+
+func (s *Server) handleRouteDelete(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/routes/")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, errInvalidPath)
+		return
+	}
+
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, errMethodNotAllowed)
+		return
+	}
+
+	deleted, err := s.db.DeleteRoute(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !deleted {
+		writeError(w, http.StatusNotFound, errNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// ──────────────────────────── Helpers ────────────────────────────
+
 func withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start).String())
+		slog.Info("http request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start).String())
 	})
 }
 

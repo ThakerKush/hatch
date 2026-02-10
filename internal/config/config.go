@@ -3,23 +3,49 @@ package config
 import (
 	"os"
 	"strconv"
+	"time"
 )
 
+// Config holds all runtime configuration for the Hatch daemon.
 type Config struct {
-	HTTPAddr          string
-	DataDir           string
+	// HTTP API
+	HTTPAddr string
+	DataDir  string
+
+	// Database
+	DatabaseURL string
+
+	// Firecracker
 	FirecrackerBinary string
 	BridgeName        string
 	BridgeCIDR        string
 	DefaultVCPU       int
 	DefaultMemMib     int
 	DefaultBootArgs   string
+
+	// Reverse proxy
+	ProxyAddr        string
+	ProxyBaseDomain  string
+	ProxyWakeTimeout time.Duration
+
+	// S3 snapshot storage
+	S3Endpoint  string
+	S3Bucket    string
+	S3Region    string
+	S3AccessKey string
+	S3SecretKey string
+
+	// Idle monitor
+	IdleCheckInterval time.Duration
+	IdleTimeout       time.Duration
 }
 
+// LoadFromEnv reads configuration from environment variables with sensible defaults.
 func LoadFromEnv() Config {
 	return Config{
 		HTTPAddr:          envOrDefault("HATCH_HTTP_ADDR", ":8080"),
 		DataDir:           envOrDefault("HATCH_DATA_DIR", "./data"),
+		DatabaseURL:       envOrDefault("DATABASE_URL", "postgres://hatch:hatch@localhost:5432/hatch?sslmode=disable"),
 		FirecrackerBinary: envOrDefault("HATCH_FIRECRACKER_BIN", "firecracker"),
 		BridgeName:        envOrDefault("HATCH_BRIDGE_NAME", "fcbr0"),
 		BridgeCIDR:        envOrDefault("HATCH_BRIDGE_CIDR", "172.16.0.1/24"),
@@ -29,7 +55,28 @@ func LoadFromEnv() Config {
 			"HATCH_DEFAULT_BOOT_ARGS",
 			"console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw rootfstype=ext4",
 		),
+
+		// Reverse proxy
+		ProxyAddr:        envOrDefault("HATCH_PROXY_ADDR", ":9090"),
+		ProxyBaseDomain:  envOrDefault("HATCH_PROXY_BASE_DOMAIN", "hatch.local"),
+		ProxyWakeTimeout: envOrDefaultDuration("HATCH_PROXY_WAKE_TIMEOUT", 60*time.Second),
+
+		// S3
+		S3Endpoint:  envOrDefault("HATCH_S3_ENDPOINT", ""),
+		S3Bucket:    envOrDefault("HATCH_S3_BUCKET", ""),
+		S3Region:    envOrDefault("HATCH_S3_REGION", "us-east-1"),
+		S3AccessKey: envOrDefault("HATCH_S3_ACCESS_KEY", ""),
+		S3SecretKey: envOrDefault("HATCH_S3_SECRET_KEY", ""),
+
+		// Idle monitor
+		IdleCheckInterval: envOrDefaultDuration("HATCH_IDLE_CHECK_INTERVAL", 1*time.Minute),
+		IdleTimeout:       envOrDefaultDuration("HATCH_IDLE_TIMEOUT", 10*time.Minute),
 	}
+}
+
+// S3Enabled returns true when the minimal S3 configuration is present.
+func (c Config) S3Enabled() bool {
+	return c.S3Bucket != ""
 }
 
 func envOrDefault(key, defaultValue string) string {
@@ -42,6 +89,15 @@ func envOrDefault(key, defaultValue string) string {
 func envOrDefaultInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil {
+			return parsed
+		}
+	}
+	return defaultValue
+}
+
+func envOrDefaultDuration(key string, defaultValue time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil {
 			return parsed
 		}
 	}

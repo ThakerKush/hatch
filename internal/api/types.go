@@ -11,11 +11,15 @@ import (
 	"github.com/ThakerKush/Hatch/internal/vmm"
 )
 
+// --- sentinel errors ---
+
 var (
 	errInvalidPath      = errors.New("invalid path")
 	errMethodNotAllowed = errors.New("method not allowed")
 	errNotFound         = errors.New("not found")
 )
+
+// --- Image ---
 
 type createImageRequest struct {
 	ID         string `json:"id"`
@@ -55,8 +59,11 @@ func (r createImageRequest) ToImage(cfg config.Config) store.Image {
 	}
 }
 
+// --- VM ---
+
 type createVMRequest struct {
 	ImageID       string `json:"image_id"`
+	TemplateID    string `json:"template_id"`
 	VCPUCount     int    `json:"vcpu_count"`
 	MemMib        int    `json:"mem_mib"`
 	BootArgs      string `json:"boot_args"`
@@ -67,8 +74,8 @@ type createVMRequest struct {
 }
 
 func (r createVMRequest) Validate() error {
-	if r.ImageID == "" {
-		return errors.New("image_id is required")
+	if r.ImageID == "" && r.TemplateID == "" {
+		return errors.New("image_id or template_id is required")
 	}
 	return nil
 }
@@ -80,6 +87,7 @@ func (r createVMRequest) ToOptions(cfg config.Config) vmm.CreateOptions {
 	}
 	return vmm.CreateOptions{
 		ImageID:       r.ImageID,
+		TemplateID:    r.TemplateID,
 		VCPUCount:     r.VCPUCount,
 		MemMib:        r.MemMib,
 		BootArgs:      r.BootArgs,
@@ -87,5 +95,84 @@ func (r createVMRequest) ToOptions(cfg config.Config) vmm.CreateOptions {
 		GuestIP:       r.GuestIP,
 		GuestMAC:      r.GuestMAC,
 		UserData:      r.UserData,
+	}
+}
+
+// --- Template ---
+
+type createTemplateRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ImageID     string `json:"image_id"`
+	UserData    string `json:"user_data"`
+	VCPUCount   int    `json:"vcpu_count"`
+	MemMib      int    `json:"mem_mib"`
+}
+
+func (r createTemplateRequest) Validate() error {
+	if r.Name == "" {
+		return errors.New("name is required")
+	}
+	if r.ImageID == "" {
+		return errors.New("image_id is required")
+	}
+	return nil
+}
+
+func (r createTemplateRequest) ToTemplate(cfg config.Config) store.Template {
+	vcpu := r.VCPUCount
+	if vcpu == 0 {
+		vcpu = cfg.DefaultVCPU
+	}
+	mem := r.MemMib
+	if mem == 0 {
+		mem = cfg.DefaultMemMib
+	}
+	now := time.Now().UTC()
+	return store.Template{
+		ID:          util.RandomID("tpl"),
+		Name:        r.Name,
+		Description: r.Description,
+		ImageID:     r.ImageID,
+		UserData:    r.UserData,
+		VCPUCount:   vcpu,
+		MemMib:      mem,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+}
+
+// --- Proxy Route ---
+
+type createRouteRequest struct {
+	Subdomain  string `json:"subdomain"`
+	TargetPort int    `json:"target_port"`
+	AutoWake   *bool  `json:"auto_wake"`
+}
+
+func (r createRouteRequest) Validate() error {
+	if r.Subdomain == "" {
+		return errors.New("subdomain is required")
+	}
+	if r.TargetPort <= 0 || r.TargetPort > 65535 {
+		return errors.New("target_port must be between 1 and 65535")
+	}
+	return nil
+}
+
+func (r createRouteRequest) ToRoute(vmID string) store.ProxyRoute {
+	autoWake := true
+	if r.AutoWake != nil {
+		autoWake = *r.AutoWake
+	}
+	now := time.Now().UTC()
+	return store.ProxyRoute{
+		ID:         util.RandomID("rt"),
+		VMID:       vmID,
+		Subdomain:  r.Subdomain,
+		TargetPort: r.TargetPort,
+		AutoWake:   autoWake,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 }
