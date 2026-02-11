@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 )
+
 // EnsureBridge creates a Linux bridge (virtual switch) with the given name and IP range, or verifies it exists
 func EnsureBridge(ctx context.Context, name, cidr string) error {
 	if name == "" {
@@ -30,9 +31,11 @@ func EnsureBridge(ctx context.Context, name, cidr string) error {
 	}
 
 	if err := run(ctx, "ip", "addr", "add", cidr, "dev", name); err != nil {
-		if !strings.Contains(err.Error(), "File exists") {
+		errMsg := err.Error()
+		if !strings.Contains(errMsg, "File exists") && !strings.Contains(errMsg, "already assigned") {
 			return err
 		}
+		// Address already on the bridge — that's fine.
 	}
 
 	return run(ctx, "ip", "link", "set", name, "up")
