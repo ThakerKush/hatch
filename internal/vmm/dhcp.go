@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // DHCPServer manages a dnsmasq process that serves DHCP on the VM bridge.
@@ -26,6 +27,7 @@ type DHCPServer struct {
 	leaseFile  string
 	logFile    string
 	cmd        *exec.Cmd
+	exited     chan struct{} // closed when the dnsmasq process exits
 	mu         sync.Mutex
 }
 
@@ -96,12 +98,25 @@ func (d *DHCPServer) Start() error {
 	log.Printf("dnsmasq started (pid %d) serving DHCP on %s [%s – %s]",
 		d.cmd.Process.Pid, d.bridgeName, d.rangeStart, d.rangeEnd)
 
+	// Channel to detect early exit.
+	d.exited = make(chan struct{})
+
 	// Reap the process in the background to avoid zombies.
 	go func() {
 		if err := d.cmd.Wait(); err != nil {
 			log.Printf("dnsmasq exited: %v", err)
 		}
+		close(d.exited)
 	}()
+
+	// Give dnsmasq a moment to crash (if it's going to).
+	select {
+	case <-d.exited:
+		logData, _ := os.ReadFile(d.logFile)
+		return fmt.Errorf("dnsmasq exited immediately after start; log: %s", string(logData))
+	case <-time.After(200 * time.Millisecond):
+		// Still running — good.
+	}
 
 	return nil
 }
@@ -157,10 +172,17 @@ func (d *DHCPServer) RemoveHost(mac string) error {
 
 // reload sends SIGHUP to dnsmasq so it re-reads the hosts file.
 func (d *DHCPServer) reload() error {
-	if d.cmd != nil && d.cmd.Process != nil {
-		return d.cmd.Process.Signal(syscall.SIGHUP)
+	if d.cmd == nil || d.cmd.Process == nil {
+		return fmt.Errorf("dnsmasq is not running")
 	}
-	return nil
+	// Check if the process has already exited.
+	select {
+	case <-d.exited:
+		logData, _ := os.ReadFile(d.logFile)
+		return fmt.Errorf("dnsmasq process has exited; log: %s", string(logData))
+	default:
+	}
+	return d.cmd.Process.Signal(syscall.SIGHUP)
 }
 
 // Stop terminates the dnsmasq process.
