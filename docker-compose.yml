@@ -68,10 +68,12 @@ services:
       HATCH_S3_REGION: "us-east-1"
       HATCH_S3_ACCESS_KEY: "minioadmin"
       HATCH_S3_SECRET_KEY: "minioadmin"
+      HATCH_FIRECRACKER_BIN: "/firecracker-data/firecracker"
       HATCH_IDLE_TIMEOUT: "10m"
       HATCH_IDLE_CHECK_INTERVAL: "1m"
     volumes:
       - hatchdata:/data
+      - /root/firecracker:/firecracker-data
 
 volumes:
   pgdata:
