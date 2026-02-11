@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/ThakerKush/Hatch/internal/util"
 	"github.com/ThakerKush/Hatch/internal/vmm"
 )
+
+var errNoDefaultImage = fmt.Errorf("no image_id provided and no default image configured (set HATCH_DEFAULT_KERNEL_PATH and HATCH_DEFAULT_ROOTFS_PATH)")
 
 // --- sentinel errors ---
 
@@ -74,9 +77,19 @@ type createVMRequest struct {
 }
 
 func (r createVMRequest) Validate() error {
-	if r.ImageID == "" && r.TemplateID == "" {
-		return errors.New("image_id or template_id is required")
+	// image_id, template_id, or neither (uses default image) are all valid.
+	return nil
+}
+
+// ResolveImageID fills in ImageID from the default when not explicitly set.
+func (r *createVMRequest) ResolveImageID(cfg config.Config) error {
+	if r.ImageID != "" {
+		return nil
 	}
+	if !cfg.DefaultImageConfigured() {
+		return errNoDefaultImage
+	}
+	r.ImageID = config.DefaultImageID
 	return nil
 }
 
@@ -113,9 +126,19 @@ func (r createTemplateRequest) Validate() error {
 	if r.Name == "" {
 		return errors.New("name is required")
 	}
-	if r.ImageID == "" {
-		return errors.New("image_id is required")
+	// image_id is optional; defaults to the auto-seeded default image.
+	return nil
+}
+
+// ResolveImageID fills in ImageID from the default when not explicitly set.
+func (r *createTemplateRequest) ResolveImageID(cfg config.Config) error {
+	if r.ImageID != "" {
+		return nil
 	}
+	if !cfg.DefaultImageConfigured() {
+		return errNoDefaultImage
+	}
+	r.ImageID = config.DefaultImageID
 	return nil
 }
 

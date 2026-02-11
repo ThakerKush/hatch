@@ -41,6 +41,37 @@ func main() {
 	}
 	defer db.Close()
 
+	// ── Default Image (auto-seed) ───────────────────────────────────────
+	if cfg.DefaultImageConfigured() {
+		existing, err := db.GetImage(config.DefaultImageID)
+		if err != nil {
+			slog.Error("check default image", "error", err)
+			os.Exit(1)
+		}
+		if existing == nil {
+			defaultImg := store.Image{
+				ID:         config.DefaultImageID,
+				KernelPath: cfg.DefaultKernelPath,
+				RootfsPath: cfg.DefaultRootfsPath,
+				BootArgs:   cfg.DefaultBootArgs,
+				CreatedAt:  time.Now().UTC(),
+			}
+			if err := db.CreateImage(defaultImg); err != nil {
+				slog.Error("seed default image", "error", err)
+				os.Exit(1)
+			}
+			slog.Info("default image seeded",
+				"id", config.DefaultImageID,
+				"kernel", cfg.DefaultKernelPath,
+				"rootfs", cfg.DefaultRootfsPath,
+			)
+		} else {
+			slog.Info("default image already exists", "id", config.DefaultImageID)
+		}
+	} else {
+		slog.Warn("HATCH_DEFAULT_KERNEL_PATH / HATCH_DEFAULT_ROOTFS_PATH not set; users must register images manually")
+	}
+
 	// ── S3 (optional) ────────────────────────────────────────────────────
 	var s3Client *store.S3Client
 	if cfg.S3Enabled() {

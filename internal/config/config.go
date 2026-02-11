@@ -23,6 +23,10 @@ type Config struct {
 	DefaultMemMib     int
 	DefaultBootArgs   string
 
+	// Default image (auto-seeded on startup when both are set)
+	DefaultKernelPath string
+	DefaultRootfsPath string
+
 	// Reverse proxy
 	ProxyAddr        string
 	ProxyBaseDomain  string
@@ -56,6 +60,10 @@ func LoadFromEnv() Config {
 			"console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw rootfstype=ext4",
 		),
 
+		// Default image
+		DefaultKernelPath: envOrDefault("HATCH_DEFAULT_KERNEL_PATH", ""),
+		DefaultRootfsPath: envOrDefault("HATCH_DEFAULT_ROOTFS_PATH", ""),
+
 		// Reverse proxy
 		ProxyAddr:        envOrDefault("HATCH_PROXY_ADDR", ":9090"),
 		ProxyBaseDomain:  envOrDefault("HATCH_PROXY_BASE_DOMAIN", "hatch.local"),
@@ -78,6 +86,14 @@ func LoadFromEnv() Config {
 func (c Config) S3Enabled() bool {
 	return c.S3Bucket != ""
 }
+
+// DefaultImageConfigured returns true when a default kernel and rootfs are set.
+func (c Config) DefaultImageConfigured() bool {
+	return c.DefaultKernelPath != "" && c.DefaultRootfsPath != ""
+}
+
+// DefaultImageID is the well-known ID used for the auto-seeded default image.
+const DefaultImageID = "img_default"
 
 func envOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {

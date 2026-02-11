@@ -172,6 +172,12 @@ func (s *Server) handleVMs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Resolve default image if image_id is still empty.
+		if err := req.ResolveImageID(s.cfg); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+
 		opts := req.ToOptions(s.cfg)
 		vm, err := s.vmm.CreateAndStart(r.Context(), opts)
 		if err != nil {
@@ -304,6 +310,11 @@ func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := req.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		// Resolve default image if image_id is empty.
+		if err := req.ResolveImageID(s.cfg); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
