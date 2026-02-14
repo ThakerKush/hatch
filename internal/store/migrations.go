@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS vms (
     guest_ip        TEXT,
     guest_mac       TEXT,
     tap_name        TEXT,
+    ssh_port        INTEGER NOT NULL DEFAULT 0,
     socket_path     TEXT,
     work_dir        TEXT,
     user_data       TEXT NOT NULL DEFAULT '',
@@ -65,6 +66,10 @@ CREATE TABLE IF NOT EXISTS proxy_routes (
 
 func (d *DB) migrate() error {
 	slog.Info("running database migrations")
-	_, err := d.db.Exec(schemaV1)
+	if _, err := d.db.Exec(schemaV1); err != nil {
+		return err
+	}
+	// Backward-compatible migration for older databases created before ssh_port existed.
+	_, err := d.db.Exec(`ALTER TABLE vms ADD COLUMN IF NOT EXISTS ssh_port INTEGER NOT NULL DEFAULT 0`)
 	return err
 }

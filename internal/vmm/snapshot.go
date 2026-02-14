@@ -136,6 +136,7 @@ func (m *Manager) Snapshot(ctx context.Context, vmID string) (*store.Snapshot, e
 
 	// 5. Clean up local resources and mark the VM as snapshotted.
 	m.cleanupResources(ctx, vm, false) // keep IP allocation
+	m.reserveSSHPort(vm.ID, vm.SSHPort)
 	m.mu.Lock()
 	delete(m.machines, vmID)
 	m.mu.Unlock()
@@ -238,6 +239,15 @@ func (m *Manager) Restore(ctx context.Context, vmID string) (*store.VM, error) {
 
 	if err := machine.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start restored machine: %w", err)
+	}
+
+	if vm.SSHPort > 0 && vm.GuestIP != "" {
+		if err := setupSSHForward(ctx, vm.SSHPort, vm.GuestIP, m.cfg.SSHAllowedCIDR); err != nil {
+			_ = machine.StopVMM()
+			_ = machine.Wait(ctx)
+			return nil, fmt.Errorf("setup ssh forward after restore: %w", err)
+		}
+		m.reserveSSHPort(vm.ID, vm.SSHPort)
 	}
 
 	m.mu.Lock()

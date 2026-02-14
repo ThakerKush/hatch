@@ -32,6 +32,11 @@ type Config struct {
 	ProxyBaseDomain  string
 	ProxyWakeTimeout time.Duration
 
+	// SSH forwarding (host port -> guest:22)
+	SSHPortMin     int
+	SSHPortMax     int
+	SSHAllowedCIDR string
+
 	// S3 snapshot storage
 	S3Endpoint  string
 	S3Bucket    string
@@ -68,6 +73,11 @@ func LoadFromEnv() Config {
 		ProxyAddr:        envOrDefault("HATCH_PROXY_ADDR", ":9090"),
 		ProxyBaseDomain:  envOrDefault("HATCH_PROXY_BASE_DOMAIN", "hatch.local"),
 		ProxyWakeTimeout: envOrDefaultDuration("HATCH_PROXY_WAKE_TIMEOUT", 60*time.Second),
+
+		// SSH forwarding
+		SSHPortMin:     envOrDefaultInt("HATCH_SSH_PORT_MIN", 16000),
+		SSHPortMax:     envOrDefaultInt("HATCH_SSH_PORT_MAX", 26000),
+		SSHAllowedCIDR: envOrDefault("HATCH_SSH_ALLOWED_CIDR", "127.0.0.1/32"),
 
 		// S3
 		S3Endpoint:  envOrDefault("HATCH_S3_ENDPOINT", ""),

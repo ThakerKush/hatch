@@ -27,6 +27,7 @@ type VM struct {
 	GuestIP       string    `json:"guest_ip,omitempty"`
 	GuestMAC      string    `json:"guest_mac,omitempty"`
 	TapName       string    `json:"tap_name,omitempty"`
+	SSHPort       int       `json:"ssh_port,omitempty"`
 	SocketPath    string    `json:"socket_path,omitempty"`
 	WorkDir       string    `json:"-"`
 	UserData      string    `json:"user_data,omitempty"`
@@ -37,7 +38,7 @@ type VM struct {
 
 // vmColumns is the SELECT column list shared by all VM queries.
 const vmColumns = `id, image_id, COALESCE(template_id,''), state, vcpu_count, mem_mib,
-  COALESCE(guest_ip,''), COALESCE(guest_mac,''), COALESCE(tap_name,''),
+  COALESCE(guest_ip,''), COALESCE(guest_mac,''), COALESCE(tap_name,''), COALESCE(ssh_port,0),
   COALESCE(socket_path,''), COALESCE(work_dir,''), user_data,
   enable_network, created_at, updated_at`
 
@@ -45,11 +46,11 @@ const vmColumns = `id, image_id, COALESCE(template_id,''), state, vcpu_count, me
 func (d *DB) CreateVM(vm VM) error {
 	_, err := d.db.Exec(
 		`INSERT INTO vms (id, image_id, template_id, state, vcpu_count, mem_mib,
-		  guest_ip, guest_mac, tap_name, socket_path, work_dir, user_data,
+		  guest_ip, guest_mac, tap_name, ssh_port, socket_path, work_dir, user_data,
 		  enable_network, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		vm.ID, vm.ImageID, nullStr(vm.TemplateID), vm.State, vm.VCPUCount, vm.MemMib,
-		vm.GuestIP, vm.GuestMAC, vm.TapName, vm.SocketPath, vm.WorkDir, vm.UserData,
+		vm.GuestIP, vm.GuestMAC, vm.TapName, vm.SSHPort, vm.SocketPath, vm.WorkDir, vm.UserData,
 		vm.EnableNetwork, vm.CreatedAt, vm.UpdatedAt,
 	)
 	if err != nil {
@@ -165,7 +166,7 @@ func scanVMRow(row *sql.Row) (*VM, error) {
 	vm := &VM{}
 	err := row.Scan(
 		&vm.ID, &vm.ImageID, &vm.TemplateID, &vm.State, &vm.VCPUCount, &vm.MemMib,
-		&vm.GuestIP, &vm.GuestMAC, &vm.TapName, &vm.SocketPath, &vm.WorkDir,
+		&vm.GuestIP, &vm.GuestMAC, &vm.TapName, &vm.SSHPort, &vm.SocketPath, &vm.WorkDir,
 		&vm.UserData, &vm.EnableNetwork, &vm.CreatedAt, &vm.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -181,7 +182,7 @@ func scanVMRows(row rowScanner) (*VM, error) {
 	vm := &VM{}
 	err := row.Scan(
 		&vm.ID, &vm.ImageID, &vm.TemplateID, &vm.State, &vm.VCPUCount, &vm.MemMib,
-		&vm.GuestIP, &vm.GuestMAC, &vm.TapName, &vm.SocketPath, &vm.WorkDir,
+		&vm.GuestIP, &vm.GuestMAC, &vm.TapName, &vm.SSHPort, &vm.SocketPath, &vm.WorkDir,
 		&vm.UserData, &vm.EnableNetwork, &vm.CreatedAt, &vm.UpdatedAt,
 	)
 	if err != nil {

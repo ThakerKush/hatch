@@ -41,6 +41,9 @@ type Manager struct {
 	mu          sync.RWMutex
 	machines    map[string]machineHandle // runtime-only; keyed by VM ID
 	bridgeReady bool
+
+	sshMu    sync.Mutex
+	sshPorts map[int]string // host ssh port -> vm id
 }
 
 // NewManager creates a Manager backed by the given database.
@@ -60,6 +63,22 @@ func NewManager(cfg config.Config, db *store.DB, s3 *store.S3Client) (*Manager, 
 		allocator: allocator,
 		dhcp:      dhcp,
 		machines:  make(map[string]machineHandle),
+		sshPorts:  make(map[int]string),
+	}
+
+	// Validate SSH CIDR and seed in-use SSH ports from persisted VMs.
+	if _, _, err := net.ParseCIDR(cfg.SSHAllowedCIDR); err != nil {
+		return nil, fmt.Errorf("invalid HATCH_SSH_ALLOWED_CIDR: %w", err)
+	}
+	if cfg.SSHPortMin <= 0 || cfg.SSHPortMax > 65535 || cfg.SSHPortMin > cfg.SSHPortMax {
+		return nil, fmt.Errorf("invalid SSH port range: %d-%d", cfg.SSHPortMin, cfg.SSHPortMax)
+	}
+	if existingVMs, err := db.ListVMs(); err == nil {
+		for i := range existingVMs {
+			if p := existingVMs[i].SSHPort; p > 0 {
+				m.sshPorts[p] = existingVMs[i].ID
+			}
+		}
 	}
 
 	// On startup, mark any VMs left in a transient state (from a prior crash)
@@ -112,10 +131,19 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
+	if opts.EnableNetwork {
+		sshPort, err := m.allocateSSHPort(vmID)
+		if err != nil {
+			_ = os.RemoveAll(vmDir)
+			return nil, err
+		}
+		vm.SSHPort = sshPort
+	}
 
 	// Persist the VM record before doing anything else so it's visible even
 	// if creation fails midway (state will be marked "error").
 	if err := m.db.CreateVM(*vm); err != nil {
+		m.releaseSSHPort(vm.SSHPort)
 		_ = os.RemoveAll(vmDir)
 		return nil, err
 	}
@@ -125,56 +153,58 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 	if opts.EnableNetwork {
 		if err := m.ensureBridge(ctx); err != nil {
 			m.markError(vmID, err)
+			m.cleanupResources(ctx, vm, true)
 			return nil, err
 		}
 
 		tapName = fmt.Sprintf("fctap-%s", vmID[:8])
 		if err := CreateTap(ctx, tapName, m.cfg.BridgeName); err != nil {
 			m.markError(vmID, err)
+			m.cleanupResources(ctx, vm, true)
 			return nil, err
 		}
+		vm.TapName = tapName
 
 		if opts.GuestIP != "" {
 			guestIP = opts.GuestIP
 		} else {
 			ip, err := m.allocator.Allocate()
 			if err != nil {
-				_ = DeleteTap(ctx, tapName)
 				m.markError(vmID, err)
+				m.cleanupResources(ctx, vm, true)
 				return nil, err
 			}
 			guestIP = ip.String()
 		}
+		vm.GuestIP = guestIP
 
 		macAddr = opts.GuestMAC
 		if macAddr == "" {
 			macAddr = randomMAC()
 		}
+		vm.GuestMAC = macAddr
 
 		if err := m.dhcp.AddHost(macAddr, guestIP); err != nil {
-			_ = DeleteTap(ctx, tapName)
-			if ip := net.ParseIP(guestIP); ip != nil {
-				m.allocator.Release(ip)
-			}
 			m.markError(vmID, err)
+			m.cleanupResources(ctx, vm, true)
 			return nil, fmt.Errorf("add DHCP reservation: %w", err)
 		}
 
 		ciPath, err := CreateCloudInitDisk(ctx, vmDir, vmID, macAddr, opts.UserData)
 		if err != nil {
-			_ = m.dhcp.RemoveHost(macAddr)
-			_ = DeleteTap(ctx, tapName)
-			if ip := net.ParseIP(guestIP); ip != nil {
-				m.allocator.Release(ip)
-			}
 			m.markError(vmID, err)
+			m.cleanupResources(ctx, vm, true)
 			return nil, fmt.Errorf("create cloud-init disk: %w", err)
 		}
 		cloudInitPath = ciPath
 
-		vm.TapName = tapName
-		vm.GuestIP = guestIP
-		vm.GuestMAC = macAddr
+		if vm.SSHPort > 0 {
+			if err := setupSSHForward(ctx, vm.SSHPort, guestIP, m.cfg.SSHAllowedCIDR); err != nil {
+				m.markError(vmID, err)
+				m.cleanupResources(ctx, vm, true)
+				return nil, fmt.Errorf("setup ssh forward: %w", err)
+			}
+		}
 
 		// Update the DB with network details.
 		if err := m.db.UpdateVMNetwork(vmID, tapName, guestIP, macAddr); err != nil {
@@ -244,6 +274,7 @@ func (m *Manager) Stop(ctx context.Context, id string) (*store.VM, error) {
 		m.markError(id, err)
 		return vm, err
 	}
+	teardownSSHForward(ctx, vm.SSHPort, vm.GuestIP, m.cfg.SSHAllowedCIDR)
 
 	_ = m.db.UpdateVMState(id, store.VMStateStopped)
 	vm.State = store.VMStateStopped
@@ -341,6 +372,9 @@ func (m *Manager) cleanupResources(ctx context.Context, vm *store.VM, releaseIP 
 		_ = m.dhcp.RemoveHost(vm.GuestMAC)
 	}
 
+	teardownSSHForward(ctx, vm.SSHPort, vm.GuestIP, m.cfg.SSHAllowedCIDR)
+	m.releaseSSHPort(vm.SSHPort)
+
 	if releaseIP && vm.GuestIP != "" {
 		if ip := net.ParseIP(vm.GuestIP); ip != nil {
 			m.allocator.Release(ip)
@@ -372,6 +406,41 @@ func (m *Manager) shutdownMachine(ctx context.Context, id string) error {
 		return nil // machine handle lost (e.g. after restart); nothing to stop
 	}
 	return machine.Shutdown(ctx)
+}
+
+func (m *Manager) allocateSSHPort(vmID string) (int, error) {
+	m.sshMu.Lock()
+	defer m.sshMu.Unlock()
+
+	for p := m.cfg.SSHPortMin; p <= m.cfg.SSHPortMax; p++ {
+		if _, used := m.sshPorts[p]; used {
+			continue
+		}
+		if portInUse(p) {
+			continue
+		}
+		m.sshPorts[p] = vmID
+		return p, nil
+	}
+	return 0, fmt.Errorf("no available ssh ports in range %d-%d", m.cfg.SSHPortMin, m.cfg.SSHPortMax)
+}
+
+func (m *Manager) releaseSSHPort(port int) {
+	if port <= 0 {
+		return
+	}
+	m.sshMu.Lock()
+	defer m.sshMu.Unlock()
+	delete(m.sshPorts, port)
+}
+
+func (m *Manager) reserveSSHPort(vmID string, port int) {
+	if port <= 0 {
+		return
+	}
+	m.sshMu.Lock()
+	defer m.sshMu.Unlock()
+	m.sshPorts[port] = vmID
 }
 
 func clampInt(value, min, max, fallback int) int {

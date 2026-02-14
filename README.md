@@ -11,6 +11,7 @@ Hatch is a single-tenant Firecracker control plane for spinning up microVMs — 
 - **Wake-on-request** — snapshotted VMs auto-restore when traffic arrives
 - **Snapshot / restore** — Firecracker native snapshots stored in S3-compatible storage
 - **Idle detection** — VMs with no proxy traffic get auto-snapshotted after a configurable timeout
+- **SSH access ports** — each networked VM gets a host `ssh_port` forwarded to guest `:22`
 - **PostgreSQL** — persistent state for VMs, images, templates, snapshots, routes
 - **Docker Compose** — one command to run Hatch + Postgres + MinIO
 
@@ -72,6 +73,12 @@ curl -sS -X POST localhost:8080/templates \
 curl -sS -X POST localhost:8080/vms \
   -H 'content-type: application/json' \
   -d '{"template_id": "<template-id>"}'
+```
+
+The response includes `ssh_port` for networked VMs. Connect with:
+
+```bash
+ssh -p <ssh_port> <user>@<hatch-host-ip>
 ```
 
 ### Set up a proxy route
@@ -156,6 +163,9 @@ Hatch images are simple pointers to kernel + rootfs files. Hatch does not build 
 | `HATCH_PROXY_ADDR` | `:9090` | Reverse proxy listen address |
 | `HATCH_PROXY_BASE_DOMAIN` | `hatch.local` | Base domain for subdomain routing |
 | `HATCH_PROXY_WAKE_TIMEOUT` | `60s` | Max time to wait for VM restore |
+| `HATCH_SSH_PORT_MIN` | `16000` | Minimum host port for VM SSH forwarding |
+| `HATCH_SSH_PORT_MAX` | `26000` | Maximum host port for VM SSH forwarding |
+| `HATCH_SSH_ALLOWED_CIDR` | `127.0.0.1/32` | Source CIDR allowed to reach forwarded SSH ports |
 | `HATCH_DATA_DIR` | `./data` | Local data directory |
 | `DATABASE_URL` | `postgres://hatch:hatch@localhost:5432/hatch?sslmode=disable` | PostgreSQL connection string |
 | `HATCH_FIRECRACKER_BIN` | `firecracker` | Firecracker binary path |
