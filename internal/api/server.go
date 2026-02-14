@@ -34,17 +34,17 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("/healthz", s.handleHealth)
 
-	// Images
-	mux.HandleFunc("/images", s.handleImages)
-	mux.HandleFunc("/images/", s.handleImage)
+	// Images (temporarily hidden)
+	// mux.HandleFunc("/images", s.handleImages)
+	// mux.HandleFunc("/images/", s.handleImage)
 
 	// VMs
 	mux.HandleFunc("/vms", s.handleVMs)
 	mux.HandleFunc("/vms/", s.handleVM)
 
-	// Templates
-	mux.HandleFunc("/templates", s.handleTemplates)
-	mux.HandleFunc("/templates/", s.handleTemplate)
+	// Templates (temporarily hidden)
+	// mux.HandleFunc("/templates", s.handleTemplates)
+	// mux.HandleFunc("/templates/", s.handleTemplate)
 
 	// Routes (top-level delete)
 	mux.HandleFunc("/routes/", s.handleRouteDelete)
