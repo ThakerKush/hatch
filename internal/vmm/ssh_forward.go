@@ -44,6 +44,12 @@ func setupSSHForward(ctx context.Context, hostPort int, guestIP, allowedCIDR str
 	); err != nil {
 		return err
 	}
+	// SNAT return path so guest replies are routable back to internet clients.
+	if err := addIPTablesRuleIfMissing(ctx, true,
+		"POSTROUTING", "-p", "tcp", "-s", guestIP, "--sport", "22", "-j", "MASQUERADE",
+	); err != nil {
+		return err
+	}
 
 	// Filter: allow only configured source CIDR to reach guest:22.
 	if err := addIPTablesRuleIfMissing(ctx, false,
@@ -74,6 +80,9 @@ func teardownSSHForward(ctx context.Context, hostPort int, guestIP, allowedCIDR 
 
 	_ = deleteIPTablesRuleIfPresent(ctx, true,
 		"PREROUTING", "-p", "tcp", "-s", allowedCIDR, "--dport", port, "-j", "DNAT", "--to-destination", dnatTarget,
+	)
+	_ = deleteIPTablesRuleIfPresent(ctx, true,
+		"POSTROUTING", "-p", "tcp", "-s", guestIP, "--sport", "22", "-j", "MASQUERADE",
 	)
 	_ = deleteIPTablesRuleIfPresent(ctx, false,
 		"FORWARD", "-p", "tcp", "-s", allowedCIDR, "-d", guestIP, "--dport", "22", "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED", "-j", "ACCEPT",
