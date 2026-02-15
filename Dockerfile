@@ -15,6 +15,8 @@ RUN apt-get update && \
         ca-certificates \
         dnsmasq-base \
         iproute2 \
+        iptables \
+        procps \
         e2fsprogs \
         curl && \
     rm -rf /var/lib/apt/lists/*
