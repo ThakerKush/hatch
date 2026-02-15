@@ -71,6 +71,7 @@ services:
       HATCH_FIRECRACKER_BIN: "/firecracker-data/firecracker"
       HATCH_DEFAULT_KERNEL_PATH: "/firecracker-data/hello-vmlinux.bin"
       HATCH_DEFAULT_ROOTFS_PATH: "/firecracker-data/ubuntu-noble.raw"
+      HATCH_SSH_ALLOWED_CIDR: "0.0.0.0/0"
       HATCH_IDLE_TIMEOUT: "10m"
       HATCH_IDLE_CHECK_INTERVAL: "1m"
     volumes:
