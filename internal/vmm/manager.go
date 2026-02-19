@@ -239,7 +239,7 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 		return nil, err
 	}
 
-	if err := machine.Start(ctx); err != nil {
+	if err := machine.Start(context.Background()); err != nil {
 		m.markError(vmID, err)
 		m.cleanupResources(ctx, vm, true)
 		return nil, err

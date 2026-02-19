@@ -237,7 +237,7 @@ func (m *Manager) Restore(ctx context.Context, vmID string) (*store.VM, error) {
 		return nil, fmt.Errorf("create machine from snapshot: %w", err)
 	}
 
-	if err := machine.Start(ctx); err != nil {
+	if err := machine.Start(context.Background()); err != nil {
 		return nil, fmt.Errorf("start restored machine: %w", err)
 	}
 

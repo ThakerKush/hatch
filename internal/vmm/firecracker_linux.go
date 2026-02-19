@@ -76,11 +76,12 @@ func newMachine(ctx context.Context, binaryPath string, cfg machineConfig) (mach
 		fcCfg.MetricsPath = filepath.Join(cfg.logDir, "firecracker.metrics")
 	}
 
-	// Use a background context for the process so it outlives the HTTP request
-	// that triggered creation. The VM lifecycle is managed explicitly via
-	// machineHandle.Shutdown / StopVMM.
+	// Use a background context for both the process and the SDK so the VM
+	// outlives the HTTP request that triggered creation. The VM lifecycle is
+	// managed explicitly via machineHandle.Shutdown / StopVMM.
+	vmCtx := context.Background()
 	cmd := exec.Command(binaryPath, "--api-sock", cfg.socketPath)
-	m, err := firecracker.NewMachine(ctx, fcCfg, firecracker.WithProcessRunner(cmd))
+	m, err := firecracker.NewMachine(vmCtx, fcCfg, firecracker.WithProcessRunner(cmd))
 	if err != nil {
 		return nil, err
 	}
@@ -134,8 +135,9 @@ func newMachineFromSnapshot(ctx context.Context, binaryPath string, cfg machineC
 		fcCfg.MetricsPath = filepath.Join(cfg.logDir, "firecracker.metrics")
 	}
 
+	vmCtx := context.Background()
 	cmd := exec.Command(binaryPath, "--api-sock", cfg.socketPath)
-	m, err := firecracker.NewMachine(ctx, fcCfg, firecracker.WithProcessRunner(cmd))
+	m, err := firecracker.NewMachine(vmCtx, fcCfg, firecracker.WithProcessRunner(cmd))
 	if err != nil {
 		return nil, err
 	}
