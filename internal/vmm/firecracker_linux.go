@@ -4,6 +4,7 @@ package vmm
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -81,6 +82,12 @@ func newMachine(ctx context.Context, binaryPath string, cfg machineConfig) (mach
 	// managed explicitly via machineHandle.Shutdown / StopVMM.
 	vmCtx := context.Background()
 	cmd := exec.Command(binaryPath, "--api-sock", cfg.socketPath)
+	if cfg.logDir != "" {
+		if f, err := os.Create(filepath.Join(cfg.logDir, "serial.log")); err == nil {
+			cmd.Stdout = f
+			cmd.Stderr = f
+		}
+	}
 	m, err := firecracker.NewMachine(vmCtx, fcCfg, firecracker.WithProcessRunner(cmd))
 	if err != nil {
 		return nil, err
@@ -137,6 +144,12 @@ func newMachineFromSnapshot(ctx context.Context, binaryPath string, cfg machineC
 
 	vmCtx := context.Background()
 	cmd := exec.Command(binaryPath, "--api-sock", cfg.socketPath)
+	if cfg.logDir != "" {
+		if f, err := os.Create(filepath.Join(cfg.logDir, "serial.log")); err == nil {
+			cmd.Stdout = f
+			cmd.Stderr = f
+		}
+	}
 	m, err := firecracker.NewMachine(vmCtx, fcCfg, firecracker.WithProcessRunner(cmd))
 	if err != nil {
 		return nil, err
