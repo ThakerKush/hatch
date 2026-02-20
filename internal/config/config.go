@@ -62,7 +62,7 @@ func LoadFromEnv() Config {
 		DefaultMemMib:     envOrDefaultInt("HATCH_DEFAULT_MEM_MIB", 256),
 		DefaultBootArgs: envOrDefault(
 			"HATCH_DEFAULT_BOOT_ARGS",
-			"console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw rootfstype=ext4",
+			"console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw rootfstype=ext4 ds=nocloud",
 		),
 
 		// Default image
