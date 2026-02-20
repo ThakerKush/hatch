@@ -212,6 +212,14 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 		}
 	}
 
+	// Copy the base rootfs so each VM has its own writable disk image.
+	vmRootfs := filepath.Join(vmDir, "rootfs.ext4")
+	if err := run(ctx, "cp", "--sparse=always", "--reflink=auto", image.RootfsPath, vmRootfs); err != nil {
+		m.markError(vmID, err)
+		m.cleanupResources(ctx, vm, true)
+		return nil, fmt.Errorf("copy rootfs for vm: %w", err)
+	}
+
 	bootArgs := image.BootArgs
 	if opts.BootArgs != "" {
 		bootArgs = opts.BootArgs
@@ -224,7 +232,7 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 		socketPath:    socketPath,
 		kernelPath:    image.KernelPath,
 		kernelArgs:    bootArgs,
-		rootfsPath:    image.RootfsPath,
+		rootfsPath:    vmRootfs,
 		vmID:          vmID,
 		vcpuCount:     int64(vm.VCPUCount),
 		memMib:        int64(vm.MemMib),
