@@ -70,7 +70,7 @@ services:
       HATCH_S3_SECRET_KEY: "minioadmin"
       HATCH_FIRECRACKER_BIN: "/firecracker-data/firecracker"
       HATCH_DEFAULT_KERNEL_PATH: "/firecracker-data/vmlinux-5.10"
-      HATCH_DEFAULT_ROOTFS_PATH: "/firecracker-data/ubuntu-noble.raw"
+      HATCH_DEFAULT_ROOTFS_PATH: "/firecracker-data/ubuntu-noble-rootfs.ext4"
       HATCH_SSH_ALLOWED_CIDR: "0.0.0.0/0"
       HATCH_IDLE_TIMEOUT: "10m"
       HATCH_IDLE_CHECK_INTERVAL: "1m"
