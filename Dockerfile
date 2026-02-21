@@ -17,8 +17,9 @@ RUN apt-get update && \
         iproute2 \
         iptables \
         procps \
+        dosfstools \
+        mtools \
         e2fsprogs \
-        genisoimage \
         curl && \
     rm -rf /var/lib/apt/lists/*
 

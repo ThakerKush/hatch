@@ -9,11 +9,11 @@ import (
 
 const defaultUserData = "#cloud-config\n"
 
-// CreateCloudInitDisk builds a NoCloud seed image (ISO 9660 with volume ID
-// "cidata") containing meta-data, user-data and network-config. Cloud-init
-// auto-detects ISO 9660 volumes labelled "cidata" and applies the config.
+// CreateCloudInitDisk builds a NoCloud seed image (FAT32 filesystem labelled
+// "cidata") containing meta-data, user-data and network-config. Cloud-init's
+// NoCloud datasource auto-detects vfat volumes with the "cidata" label.
 //
-// Prerequisites on the host: genisoimage.
+// Prerequisites on the host: mkfs.vfat (dosfstools), mcopy (mtools).
 func CreateCloudInitDisk(ctx context.Context, vmDir, instanceID, macAddr, userData string) (string, error) {
 	srcDir := filepath.Join(vmDir, "cidata-src")
 	if err := os.MkdirAll(srcDir, 0o755); err != nil {
@@ -43,15 +43,20 @@ func CreateCloudInitDisk(ctx context.Context, vmDir, instanceID, macAddr, userDa
 
 	imgPath := filepath.Join(vmDir, "cidata.img")
 
-	if err := run(ctx, "genisoimage",
-		"-output", imgPath,
-		"-volid", "cidata",
-		"-joliet",
-		"-rock",
-		"-quiet",
-		srcDir,
-	); err != nil {
-		return "", fmt.Errorf("create cidata ISO image: %w", err)
+	if err := run(ctx, "truncate", "-s", "8M", imgPath); err != nil {
+		return "", fmt.Errorf("create cidata image: %w", err)
+	}
+
+	if err := run(ctx, "mkfs.vfat", "-n", "CIDATA", imgPath); err != nil {
+		return "", fmt.Errorf("format cidata image: %w", err)
+	}
+
+	// Copy seed files into the FAT image without mounting (mcopy from mtools).
+	for _, name := range []string{"meta-data", "user-data", "network-config"} {
+		src := filepath.Join(srcDir, name)
+		if err := run(ctx, "mcopy", "-i", imgPath, src, "::"+name); err != nil {
+			return "", fmt.Errorf("copy %s into cidata image: %w", name, err)
+		}
 	}
 
 	return imgPath, nil
