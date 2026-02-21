@@ -9,11 +9,12 @@ import (
 
 const defaultUserData = "#cloud-config\n"
 
-// CreateCloudInitDisk builds a NoCloud seed image (FAT32 filesystem labelled
+// CreateCloudInitDisk builds a NoCloud seed image (ext4 filesystem labelled
 // "cidata") containing meta-data, user-data and network-config. Cloud-init's
-// NoCloud datasource auto-detects vfat volumes with the "cidata" label.
+// NoCloud datasource finds the disk via blkid label search and mounts it.
+// ext4 is used because the Firecracker CI kernels lack vfat/iso9660 support.
 //
-// Prerequisites on the host: mkfs.vfat (dosfstools), mcopy (mtools).
+// Prerequisites on the host: truncate, mkfs.ext4 (e2fsprogs >= 1.43 for -d).
 func CreateCloudInitDisk(ctx context.Context, vmDir, instanceID, macAddr, userData string) (string, error) {
 	srcDir := filepath.Join(vmDir, "cidata-src")
 	if err := os.MkdirAll(srcDir, 0o755); err != nil {
@@ -47,16 +48,8 @@ func CreateCloudInitDisk(ctx context.Context, vmDir, instanceID, macAddr, userDa
 		return "", fmt.Errorf("create cidata image: %w", err)
 	}
 
-	if err := run(ctx, "mkfs.vfat", "-n", "CIDATA", imgPath); err != nil {
+	if err := run(ctx, "mkfs.ext4", "-L", "cidata", "-d", srcDir, "-F", "-q", imgPath); err != nil {
 		return "", fmt.Errorf("format cidata image: %w", err)
-	}
-
-	// Copy seed files into the FAT image without mounting (mcopy from mtools).
-	for _, name := range []string{"meta-data", "user-data", "network-config"} {
-		src := filepath.Join(srcDir, name)
-		if err := run(ctx, "mcopy", "-i", imgPath, src, "::"+name); err != nil {
-			return "", fmt.Errorf("copy %s into cidata image: %w", name, err)
-		}
 	}
 
 	return imgPath, nil

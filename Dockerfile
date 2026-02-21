@@ -17,8 +17,6 @@ RUN apt-get update && \
         iproute2 \
         iptables \
         procps \
-        dosfstools \
-        mtools \
         e2fsprogs \
         curl && \
     rm -rf /var/lib/apt/lists/*
