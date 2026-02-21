@@ -148,7 +148,7 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 		return nil, err
 	}
 
-	var tapName, guestIP, macAddr, cloudInitPath string
+	var tapName, guestIP, macAddr string
 
 	if opts.EnableNetwork {
 		if err := m.ensureBridge(ctx); err != nil {
@@ -190,14 +190,6 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 			return nil, fmt.Errorf("add DHCP reservation: %w", err)
 		}
 
-		ciPath, err := CreateCloudInitDisk(ctx, vmDir, vmID, macAddr, opts.UserData)
-		if err != nil {
-			m.markError(vmID, err)
-			m.cleanupResources(ctx, vm, true)
-			return nil, fmt.Errorf("create cloud-init disk: %w", err)
-		}
-		cloudInitPath = ciPath
-
 		if vm.SSHPort > 0 {
 			if err := setupSSHForward(ctx, vm.SSHPort, guestIP, m.cfg.SSHAllowedCIDR); err != nil {
 				m.markError(vmID, err)
@@ -220,6 +212,12 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 		return nil, fmt.Errorf("copy rootfs for vm: %w", err)
 	}
 
+	if err := InjectCloudInitSeed(ctx, vmRootfs, vmDir, vmID, macAddr, opts.UserData); err != nil {
+		m.markError(vmID, err)
+		m.cleanupResources(ctx, vm, true)
+		return nil, fmt.Errorf("inject cloud-init seed: %w", err)
+	}
+
 	bootArgs := image.BootArgs
 	if opts.BootArgs != "" {
 		bootArgs = opts.BootArgs
@@ -239,7 +237,6 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 		tapName:       tapName,
 		macAddr:       macAddr,
 		logDir:        vmDir,
-		cloudInitPath: cloudInitPath,
 	})
 	if err != nil {
 		m.markError(vmID, err)
