@@ -18,6 +18,7 @@ RUN apt-get update && \
         iptables \
         procps \
         e2fsprogs \
+        genisoimage \
         curl && \
     rm -rf /var/lib/apt/lists/*
 
