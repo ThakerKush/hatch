@@ -1,17 +1,41 @@
 services:
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CF_DNS_API_TOKEN: "${CF_DNS_API_TOKEN}"
+    volumes:
+      - letsencrypt:/letsencrypt
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    command:
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      # Wildcard certs require DNS challenge (Cloudflare)
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare"
+      # Uncomment for staging certs while testing (avoids rate limits)
+      # - "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: hatch
-      POSTGRES_PASSWORD: hatch
-      POSTGRES_DB: hatch
+      POSTGRES_USER: "${POSTGRES_USER:-hatch}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-hatch}"
+      POSTGRES_DB: "${POSTGRES_DB:-hatch}"
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hatch"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -21,8 +45,8 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
     ports:
       - "9000:9000"   # S3 API
       - "9001:9001"   # MinIO Console
@@ -34,7 +58,6 @@ services:
       timeout: 3s
       retries: 5
 
-  # One-shot container that creates the snapshot bucket in MinIO.
   minio-init:
     image: minio/mc:latest
     depends_on:
@@ -42,10 +65,14 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-        mc alias set local http://minio:9000 minioadmin minioadmin &&
-        mc mb --ignore-existing local/hatch-snapshots &&
+        mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+        mc mb --ignore-existing local/$${HATCH_S3_BUCKET} &&
         echo 'Bucket ready'
       "
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+      HATCH_S3_BUCKET: "${HATCH_S3_BUCKET:-hatch-snapshots}"
 
   hatch:
     build: .
@@ -55,25 +82,25 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-    privileged: true          # required for Firecracker, TAP devices, bridges
-    network_mode: host        # VMs need host networking for bridge/TAP
+    privileged: true
+    network_mode: host
     environment:
-      DATABASE_URL: "postgres://hatch:hatch@127.0.0.1:5432/hatch?sslmode=disable"
-      HATCH_HTTP_ADDR: ":8080"
-      HATCH_PROXY_ADDR: ":9090"
-      HATCH_PROXY_BASE_DOMAIN: "hatch.local"
-      HATCH_DATA_DIR: "/data"
-      HATCH_S3_ENDPOINT: "http://127.0.0.1:9000"
-      HATCH_S3_BUCKET: "hatch-snapshots"
-      HATCH_S3_REGION: "us-east-1"
-      HATCH_S3_ACCESS_KEY: "minioadmin"
-      HATCH_S3_SECRET_KEY: "minioadmin"
-      HATCH_FIRECRACKER_BIN: "/firecracker-data/firecracker"
-      HATCH_DEFAULT_KERNEL_PATH: "/firecracker-data/vmlinux-5.10"
-      HATCH_DEFAULT_ROOTFS_PATH: "/firecracker-data/ubuntu-noble-rootfs.ext4"
-      HATCH_SSH_ALLOWED_CIDR: "0.0.0.0/0"
-      HATCH_IDLE_TIMEOUT: "10m"
-      HATCH_IDLE_CHECK_INTERVAL: "1m"
+      DATABASE_URL: "${DATABASE_URL}"
+      HATCH_HTTP_ADDR: "${HATCH_HTTP_ADDR}"
+      HATCH_PROXY_ADDR: "${HATCH_PROXY_ADDR}"
+      HATCH_PROXY_BASE_DOMAIN: "${HATCH_BASE_DOMAIN}"
+      HATCH_DATA_DIR: "${HATCH_DATA_DIR}"
+      HATCH_S3_ENDPOINT: "${HATCH_S3_ENDPOINT}"
+      HATCH_S3_BUCKET: "${HATCH_S3_BUCKET}"
+      HATCH_S3_REGION: "${HATCH_S3_REGION}"
+      HATCH_S3_ACCESS_KEY: "${HATCH_S3_ACCESS_KEY}"
+      HATCH_S3_SECRET_KEY: "${HATCH_S3_SECRET_KEY}"
+      HATCH_FIRECRACKER_BIN: "${HATCH_FIRECRACKER_BIN}"
+      HATCH_DEFAULT_KERNEL_PATH: "${HATCH_DEFAULT_KERNEL_PATH}"
+      HATCH_DEFAULT_ROOTFS_PATH: "${HATCH_DEFAULT_ROOTFS_PATH}"
+      HATCH_SSH_ALLOWED_CIDR: "${HATCH_SSH_ALLOWED_CIDR}"
+      HATCH_IDLE_TIMEOUT: "${HATCH_IDLE_TIMEOUT}"
+      HATCH_IDLE_CHECK_INTERVAL: "${HATCH_IDLE_CHECK_INTERVAL}"
     volumes:
       - hatchdata:/data
       - /root/firecracker:/firecracker-data
@@ -82,3 +109,4 @@ volumes:
   pgdata:
   miniodata:
   hatchdata:
+  letsencrypt:

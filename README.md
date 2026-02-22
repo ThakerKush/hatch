@@ -7,13 +7,14 @@ Hatch is a single-tenant Firecracker control plane for spinning up microVMs — 
 - **VM lifecycle** — create, stop, delete microVMs via REST API
 - **Automatic networking** — bridge + TAP + DHCP + cloud-init, fully automated
 - **Templates** — reusable VM configs (image + cloud-init + resource defaults)
-- **Reverse proxy** — subdomain-based routing (`agent.hatch.local` → VM guest IP)
+- **Reverse proxy** — subdomain-based routing (`vm123.yourdomain.com` → VM guest IP)
 - **Wake-on-request** — snapshotted VMs auto-restore when traffic arrives
 - **Snapshot / restore** — Firecracker native snapshots stored in S3-compatible storage
 - **Idle detection** — VMs with no proxy traffic get auto-snapshotted after a configurable timeout
 - **SSH access ports** — each networked VM gets a host `ssh_port` forwarded to guest `:22`
 - **PostgreSQL** — persistent state for VMs, images, templates, snapshots, routes
-- **Docker Compose** — one command to run Hatch + Postgres + MinIO
+- **HTTPS via Traefik** — automatic wildcard TLS certs, internet-ready
+- **Docker Compose** — one command to run Hatch + Traefik + Postgres + MinIO
 
 ## Quick start
 
@@ -23,11 +24,20 @@ On your Linux VPS with KVM and Firecracker installed:
 
 ```bash
 git clone <your-repo> && cd hatch
+
+# Configure your domain and credentials
+cp .env.example .env
+# Edit .env: set HATCH_BASE_DOMAIN, ACME_EMAIL, CF_DNS_API_TOKEN
+# Edit traefik/dynamic.yml: replace "yourdomain.com" with your domain
+
 docker compose up -d
 ```
 
+**DNS setup:** create a wildcard `A` record `*.yourdomain.com` pointing to this server's public IP.
+
 This starts:
-- **Hatch** daemon (API on `:8080`, proxy on `:9090`)
+- **Traefik** — edge proxy with automatic HTTPS (`:80`, `:443`)
+- **Hatch** daemon — API (localhost `:8080`), VM proxy (localhost `:9090`)
 - **PostgreSQL** on `:5432`
 - **MinIO** (S3-compatible) on `:9000` (console on `:9001`)
 
@@ -89,7 +99,7 @@ curl -sS -X POST localhost:8080/vms/<vm-id>/routes \
   -d '{"subdomain": "my-agent", "target_port": 8080}'
 ```
 
-Now `http://my-agent.hatch.local:9090/` forwards to the VM's port 8080.
+Now `https://my-agent.yourdomain.com` forwards to the VM's port 8080 (via Traefik → Hatch proxy).
 
 ### Snapshot / restore
 

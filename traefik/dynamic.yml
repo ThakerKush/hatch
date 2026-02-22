@@ -1,0 +1,24 @@
+# Traefik dynamic config — routes all HTTPS traffic to Hatch proxy.
+#
+# Replace "yourdomain.com" with your actual domain.
+# Wildcard DNS (*.yourdomain.com) must point to this server's public IP.
+
+http:
+  routers:
+    hatch-vms:
+      rule: "HostRegexp(`.+`)"
+      entryPoints:
+        - websecure
+      service: hatch-proxy
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "hatchvm.com"
+            sans:
+              - "*.hatchvm.com"
+
+  services:
+    hatch-proxy:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:9090"

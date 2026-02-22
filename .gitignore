@@ -83,3 +83,6 @@ Temporary Items
 
 # Personal debugging file
 DEBUGGING.md
+
+# Environment secrets
+.env
