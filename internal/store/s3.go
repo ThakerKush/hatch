@@ -1,6 +1,7 @@
 package store
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -101,6 +102,70 @@ func (c *S3Client) Download(ctx context.Context, key, dest string) error {
 
 	if _, err := io.Copy(f, out.Body); err != nil {
 		return fmt.Errorf("write dest file: %w", err)
+	}
+	return nil
+}
+
+// UploadFileCompressed gzip-compresses a local file and uploads it to S3.
+func (c *S3Client) UploadFileCompressed(ctx context.Context, key, filePath string) error {
+	slog.Info("uploading compressed to S3", "bucket", c.bucket, "key", key)
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("open file for compressed upload: %w", err)
+	}
+	defer f.Close()
+
+	pr, pw := io.Pipe()
+	go func() {
+		gw := gzip.NewWriter(pw)
+		_, copyErr := io.Copy(gw, f)
+		closeErr := gw.Close()
+		if copyErr != nil {
+			pw.CloseWithError(copyErr)
+		} else {
+			pw.CloseWithError(closeErr)
+		}
+	}()
+
+	_, err = c.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+		Body:   pr,
+	})
+	if err != nil {
+		return fmt.Errorf("s3 upload compressed %s: %w", key, err)
+	}
+	return nil
+}
+
+// DownloadCompressed fetches a gzip-compressed S3 object, decompresses it,
+// and writes the result to the local dest path.
+func (c *S3Client) DownloadCompressed(ctx context.Context, key, dest string) error {
+	slog.Info("downloading compressed from S3", "bucket", c.bucket, "key", key, "dest", dest)
+	out, err := c.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("s3 download %s: %w", key, err)
+	}
+	defer out.Body.Close()
+
+	gr, err := gzip.NewReader(out.Body)
+	if err != nil {
+		return fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gr.Close()
+
+	f, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("create dest file: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := io.Copy(f, gr); err != nil {
+		return fmt.Errorf("decompress to dest: %w", err)
 	}
 	return nil
 }

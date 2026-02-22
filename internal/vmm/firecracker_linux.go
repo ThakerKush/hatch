@@ -120,8 +120,9 @@ func newMachineFromSnapshot(ctx context.Context, binaryPath string, cfg machineC
 	}
 
 	fcCfg := firecracker.Config{
-		SocketPath:        cfg.socketPath,
-		Drives:            drives,
+		SocketPath:      cfg.socketPath,
+		KernelImagePath: cfg.kernelPath,
+		Drives:          drives,
 		NetworkInterfaces: networkInterfaces,
 		MachineCfg: fcmodels.MachineConfiguration{
 			VcpuCount:  firecracker.Int64(cfg.vcpuCount),

@@ -148,6 +148,9 @@ func (p *Proxy) wakeVM(ctx context.Context, vmID string) error {
 	slog.Info("waking snapshotted vm", "vm", vmID)
 	_, err := p.vmm.Restore(ctx, vmID)
 	if err != nil {
+		// Mark VM as error so subsequent queued requests don't retry
+		// the same failing restore in a tight loop.
+		p.vmm.MarkError(vmID, err)
 		return fmt.Errorf("restore vm %s: %w", vmID, err)
 	}
 

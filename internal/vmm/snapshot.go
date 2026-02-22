@@ -81,25 +81,33 @@ func (m *Manager) Snapshot(ctx context.Context, vmID string) (*store.Snapshot, e
 		return nil, fmt.Errorf("create snapshot: %w", err)
 	}
 
-	// 3. Upload artefacts to S3.
+	// 3. Compute disk delta (only user changes vs base image).
+	vmRootfs := filepath.Join(vm.WorkDir, "rootfs.ext4")
+	deltaPath := filepath.Join(snapDir, "disk.delta")
+	slog.Info("computing disk delta", "base", image.RootfsPath, "modified", vmRootfs)
+	if err := ComputeDelta(image.RootfsPath, vmRootfs, deltaPath); err != nil {
+		return nil, fmt.Errorf("compute disk delta: %w", err)
+	}
+
+	// 4. Upload artefacts to S3 (compressed where beneficial).
 	prefix := fmt.Sprintf("snapshots/%s/%s", vmID, snapID)
 	stateKey := prefix + "/vmstate"
-	memKey := prefix + "/memory"
-	diskKey := prefix + "/disk.ext4"
+	memKey := prefix + "/memory.gz"
+	diskKey := prefix + "/disk.delta.gz"
 
 	if err := m.s3.UploadFile(ctx, stateKey, statePath); err != nil {
 		return nil, err
 	}
-	if err := m.s3.UploadFile(ctx, memKey, memPath); err != nil {
+	if err := m.s3.UploadFileCompressed(ctx, memKey, memPath); err != nil {
 		return nil, err
 	}
-	if err := m.s3.UploadFile(ctx, diskKey, image.RootfsPath); err != nil {
+	if err := m.s3.UploadFileCompressed(ctx, diskKey, deltaPath); err != nil {
 		return nil, err
 	}
 
-	// Calculate total size.
+	// Calculate total size of local artefacts before compression.
 	var totalSize int64
-	for _, p := range []string{statePath, memPath, image.RootfsPath} {
+	for _, p := range []string{statePath, memPath, deltaPath} {
 		if fi, err := os.Stat(p); err == nil {
 			totalSize += fi.Size()
 		}
@@ -135,7 +143,7 @@ func (m *Manager) Snapshot(ctx context.Context, vmID string) (*store.Snapshot, e
 	}
 
 	// 5. Clean up local resources and mark the VM as snapshotted.
-	m.cleanupResources(ctx, vm, false) // keep IP allocation
+	m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: false, removeWorkDir: false})
 	m.reserveSSHPort(vm.ID, vm.SSHPort)
 	m.mu.Lock()
 	delete(m.machines, vmID)
@@ -191,27 +199,37 @@ func (m *Manager) Restore(ctx context.Context, vmID string) (*store.VM, error) {
 	socketPath := filepath.Join(vmDir, "firecracker.socket")
 	_ = os.RemoveAll(socketPath)
 
-	// Download snapshot artefacts.
+	// Download snapshot artefacts (memory and delta are gzip-compressed).
 	memPath := filepath.Join(vmDir, "memory")
 	statePath := filepath.Join(vmDir, "vmstate")
+	deltaPath := filepath.Join(vmDir, "disk.delta")
 	diskPath := filepath.Join(vmDir, "rootfs.ext4")
 
-	if err := m.s3.Download(ctx, snap.MemoryKey, memPath); err != nil {
+	if err := m.s3.DownloadCompressed(ctx, snap.MemoryKey, memPath); err != nil {
 		return nil, err
 	}
 	if err := m.s3.Download(ctx, snap.StateKey, statePath); err != nil {
 		return nil, err
 	}
-	if err := m.s3.Download(ctx, snap.DiskKey, diskPath); err != nil {
+	if err := m.s3.DownloadCompressed(ctx, snap.DiskKey, deltaPath); err != nil {
 		return nil, err
 	}
 
+	// Reconstruct the per-VM rootfs: base image + delta of user changes.
+	slog.Info("reconstructing rootfs from base + delta", "vm", vmID)
+	if err := ApplyDelta(cfg.RootfsPath, deltaPath, diskPath); err != nil {
+		return nil, fmt.Errorf("apply disk delta: %w", err)
+	}
+	_ = os.Remove(deltaPath)
+
 	// Re-establish networking.
+	tapName := fmt.Sprintf("fctap-%s", vmID[:8])
 	if vm.EnableNetwork && cfg.GuestMAC != "" {
 		if err := m.ensureBridge(ctx); err != nil {
 			return nil, err
 		}
-		tapName := fmt.Sprintf("fctap-%s", vmID[:8])
+		// Delete any leftover TAP from a previous failed restore attempt.
+		_ = DeleteTap(ctx, tapName)
 		if err := CreateTap(ctx, tapName, m.cfg.BridgeName); err != nil {
 			return nil, err
 		}
@@ -229,15 +247,17 @@ func (m *Manager) Restore(ctx context.Context, vmID string) (*store.VM, error) {
 		vmID:       vmID,
 		vcpuCount:  int64(cfg.VCPUCount),
 		memMib:     int64(cfg.MemMib),
-		tapName:    cfg.TapName,
+		tapName:    tapName,
 		macAddr:    cfg.GuestMAC,
 		logDir:     vmDir,
 	}, memPath, statePath)
 	if err != nil {
+		_ = DeleteTap(ctx, tapName)
 		return nil, fmt.Errorf("create machine from snapshot: %w", err)
 	}
 
 	if err := machine.Start(context.Background()); err != nil {
+		_ = DeleteTap(ctx, tapName)
 		return nil, fmt.Errorf("start restored machine: %w", err)
 	}
 
@@ -245,6 +265,7 @@ func (m *Manager) Restore(ctx context.Context, vmID string) (*store.VM, error) {
 		if err := setupSSHForward(ctx, vm.SSHPort, vm.GuestIP, m.cfg.SSHAllowedCIDR); err != nil {
 			_ = machine.StopVMM()
 			_ = machine.Wait(ctx)
+			_ = DeleteTap(ctx, tapName)
 			return nil, fmt.Errorf("setup ssh forward after restore: %w", err)
 		}
 		m.reserveSSHPort(vm.ID, vm.SSHPort)

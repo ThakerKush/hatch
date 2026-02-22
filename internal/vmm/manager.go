@@ -153,14 +153,14 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 	if opts.EnableNetwork {
 		if err := m.ensureBridge(ctx); err != nil {
 			m.markError(vmID, err)
-			m.cleanupResources(ctx, vm, true)
+			m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 			return nil, err
 		}
 
 		tapName = fmt.Sprintf("fctap-%s", vmID[:8])
 		if err := CreateTap(ctx, tapName, m.cfg.BridgeName); err != nil {
 			m.markError(vmID, err)
-			m.cleanupResources(ctx, vm, true)
+			m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 			return nil, err
 		}
 		vm.TapName = tapName
@@ -171,7 +171,7 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 			ip, err := m.allocator.Allocate()
 			if err != nil {
 				m.markError(vmID, err)
-				m.cleanupResources(ctx, vm, true)
+				m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 				return nil, err
 			}
 			guestIP = ip.String()
@@ -186,14 +186,14 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 
 		if err := m.dhcp.AddHost(macAddr, guestIP); err != nil {
 			m.markError(vmID, err)
-			m.cleanupResources(ctx, vm, true)
+			m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 			return nil, fmt.Errorf("add DHCP reservation: %w", err)
 		}
 
 		if vm.SSHPort > 0 {
 			if err := setupSSHForward(ctx, vm.SSHPort, guestIP, m.cfg.SSHAllowedCIDR); err != nil {
 				m.markError(vmID, err)
-				m.cleanupResources(ctx, vm, true)
+				m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 				return nil, fmt.Errorf("setup ssh forward: %w", err)
 			}
 		}
@@ -208,13 +208,13 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 	vmRootfs := filepath.Join(vmDir, "rootfs.ext4")
 	if err := run(ctx, "cp", "--sparse=always", "--reflink=auto", image.RootfsPath, vmRootfs); err != nil {
 		m.markError(vmID, err)
-		m.cleanupResources(ctx, vm, true)
+		m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 		return nil, fmt.Errorf("copy rootfs for vm: %w", err)
 	}
 
 	if err := InjectCloudInitSeed(ctx, vmRootfs, vmDir, vmID, macAddr, opts.UserData); err != nil {
 		m.markError(vmID, err)
-		m.cleanupResources(ctx, vm, true)
+		m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 		return nil, fmt.Errorf("inject cloud-init seed: %w", err)
 	}
 
@@ -240,13 +240,13 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 	})
 	if err != nil {
 		m.markError(vmID, err)
-		m.cleanupResources(ctx, vm, true)
+		m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 		return nil, err
 	}
 
 	if err := machine.Start(context.Background()); err != nil {
 		m.markError(vmID, err)
-		m.cleanupResources(ctx, vm, true)
+		m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 		return nil, err
 	}
 
@@ -300,7 +300,7 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("vm not found: %s", id)
 	}
 
-	m.cleanupResources(ctx, vm, true)
+	m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 
 	m.mu.Lock()
 	delete(m.machines, id)
@@ -359,7 +359,12 @@ func (m *Manager) ensureBridge(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) cleanupResources(ctx context.Context, vm *store.VM, releaseIP bool) {
+type cleanupOpts struct {
+	releaseIP     bool
+	removeWorkDir bool
+}
+
+func (m *Manager) cleanupResources(ctx context.Context, vm *store.VM, opts cleanupOpts) {
 	m.mu.RLock()
 	machine := m.machines[vm.ID]
 	m.mu.RUnlock()
@@ -380,13 +385,13 @@ func (m *Manager) cleanupResources(ctx context.Context, vm *store.VM, releaseIP 
 	teardownSSHForward(ctx, vm.SSHPort, vm.GuestIP, m.cfg.SSHAllowedCIDR)
 	m.releaseSSHPort(vm.SSHPort)
 
-	if releaseIP && vm.GuestIP != "" {
+	if opts.releaseIP && vm.GuestIP != "" {
 		if ip := net.ParseIP(vm.GuestIP); ip != nil {
 			m.allocator.Release(ip)
 		}
 	}
 
-	if vm.WorkDir != "" {
+	if opts.removeWorkDir && vm.WorkDir != "" {
 		_ = os.RemoveAll(vm.WorkDir)
 	}
 }
@@ -401,6 +406,12 @@ func (m *Manager) Shutdown() {
 func (m *Manager) markError(id string, cause error) {
 	slog.Error("vm error", "id", id, "error", cause)
 	_ = m.db.UpdateVMState(id, store.VMStateError)
+}
+
+// MarkError transitions a VM to the error state. Exported for use by the
+// proxy layer when a wake-on-request restore fails.
+func (m *Manager) MarkError(id string, cause error) {
+	m.markError(id, cause)
 }
 
 func (m *Manager) shutdownMachine(ctx context.Context, id string) error {
