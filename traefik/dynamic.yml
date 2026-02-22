@@ -13,9 +13,7 @@ http:
       tls:
         certResolver: letsencrypt
         domains:
-          - main: "hatchvm.com"
-            sans:
-              - "*.hatchvm.com"
+          - main: "*.hatchvm.com"
 
     hatch-vms:
       rule: "HostRegexp(`.+`)"
@@ -25,6 +23,8 @@ http:
       priority: 1
       tls:
         certResolver: letsencrypt
+        domains:
+          - main: "*.hatchvm.com"
 
   services:
     hatch-api:
