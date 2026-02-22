@@ -59,7 +59,7 @@ func LoadFromEnv() Config {
 		BridgeName:        envOrDefault("HATCH_BRIDGE_NAME", "fcbr0"),
 		BridgeCIDR:        envOrDefault("HATCH_BRIDGE_CIDR", "172.16.0.1/24"),
 		DefaultVCPU:       envOrDefaultInt("HATCH_DEFAULT_VCPU", 1),
-		DefaultMemMib:     envOrDefaultInt("HATCH_DEFAULT_MEM_MIB", 256),
+		DefaultMemMib:     envOrDefaultInt("HATCH_DEFAULT_MEM_MIB", 512),
 		DefaultBootArgs: envOrDefault(
 			"HATCH_DEFAULT_BOOT_ARGS",
 			"console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw rootfstype=ext4",
