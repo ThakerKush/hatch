@@ -38,7 +38,45 @@ func EnsureBridge(ctx context.Context, name, cidr string) error {
 		// Address already on the bridge — that's fine.
 	}
 
-	return run(ctx, "ip", "link", "set", name, "up")
+	if err := run(ctx, "ip", "link", "set", name, "up"); err != nil {
+		return err
+	}
+
+	// NAT outbound traffic from VMs so they can reach the internet.
+	masq := rule{
+		Table:  tableNAT,
+		Chain:  chainPostrouting,
+		Source: cidr,
+		Action: actionMasquerade,
+	}
+	if err := masq.add(ctx); err != nil {
+		return fmt.Errorf("add masquerade rule: %w", err)
+	}
+
+	// Allow forwarding for bridge traffic (Docker sets FORWARD policy to DROP).
+	fwdOut := rule{
+		Table:  tableFilter,
+		Chain:  chainForward,
+		Source: cidr,
+		Action: actionAccept,
+		Insert: true,
+	}
+	if err := fwdOut.add(ctx); err != nil {
+		return fmt.Errorf("add forward-out rule: %w", err)
+	}
+	fwdIn := rule{
+		Table:   tableFilter,
+		Chain:   chainForward,
+		Dest:    cidr,
+		Matches: []string{"-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED"},
+		Action:  actionAccept,
+		Insert:  true,
+	}
+	if err := fwdIn.add(ctx); err != nil {
+		return fmt.Errorf("add forward-in rule: %w", err)
+	}
+
+	return nil
 }
 
 // Create a virtual NIC, activate it and plug it into the specified bridge
