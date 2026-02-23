@@ -89,6 +89,23 @@ func NewManager(cfg config.Config, db *store.DB, s3 *store.S3Client) (*Manager, 
 		slog.Warn("marked stale VMs from previous run", "count", stale)
 	}
 
+	// Remove any TAP devices left on the host from a previous process run.
+	// Kernel interfaces persist across container/process restarts, so without
+	// this they accumulate indefinitely.
+	keepTaps := make(map[string]struct{})
+	if allVMs, err := db.ListVMs(); err == nil {
+		for _, vm := range allVMs {
+			if vm.TapName != "" {
+				keepTaps[vm.TapName] = struct{}{}
+			}
+		}
+	}
+	if removed, err := ReconcileTaps(context.Background(), "fctap-", keepTaps); err != nil {
+		slog.Warn("tap reconciliation failed", "error", err)
+	} else if removed > 0 {
+		slog.Info("cleaned up stale tap devices", "count", removed)
+	}
+
 	return m, nil
 }
 

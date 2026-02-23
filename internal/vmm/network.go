@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os/exec"
 	"strings"
@@ -102,6 +103,35 @@ func DeleteTap(ctx context.Context, name string) error {
 		return nil
 	}
 	return run(ctx, "ip", "link", "del", name)
+}
+
+// ReconcileTaps removes any host TAP interfaces whose name starts with the
+// given prefix but are not present in the keepNames set. This is called on
+// startup to clean up TAPs left behind by a previous process crash or
+// container restart, since kernel interfaces persist across process
+// boundaries.
+func ReconcileTaps(ctx context.Context, prefix string, keepNames map[string]struct{}) (int, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return 0, fmt.Errorf("list interfaces: %w", err)
+	}
+
+	removed := 0
+	for _, iface := range ifaces {
+		if !strings.HasPrefix(iface.Name, prefix) {
+			continue
+		}
+		if _, keep := keepNames[iface.Name]; keep {
+			continue
+		}
+		if delErr := run(ctx, "ip", "link", "del", iface.Name); delErr != nil {
+			slog.Warn("failed to remove stale tap", "tap", iface.Name, "error", delErr)
+			continue
+		}
+		slog.Info("removed stale tap", "tap", iface.Name)
+		removed++
+	}
+	return removed, nil
 }
 
 func run(ctx context.Context, command string, args ...string) error {
