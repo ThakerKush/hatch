@@ -162,8 +162,9 @@ func newMachineFromSnapshot(ctx context.Context, binaryPath string, cfg machineC
 	// → (no LoadSnapshot).  startInstance() is a no-op when Snapshot is set,
 	// so the VM is never actually loaded or started.
 	//
-	// Override with the correct chain: configure host resources the restored
-	// VM needs (drives, network) then load the snapshot.
+	// Override with the correct chain: start the VMM, then load the snapshot.
+	// Drives and network interfaces must NOT be configured via the API before
+	// snapshot load — Firecracker reads those from the vmstate file.
 	m.Handlers.Validation = firecracker.HandlerList{}.Append(
 		firecracker.NetworkConfigValidationHandler,
 		firecracker.LoadSnapshotConfigValidationHandler,
@@ -173,8 +174,6 @@ func newMachineFromSnapshot(ctx context.Context, binaryPath string, cfg machineC
 		firecracker.StartVMMHandler,
 		firecracker.CreateLogFilesHandler,
 		firecracker.BootstrapLoggingHandler,
-		firecracker.AttachDrivesHandler,
-		firecracker.CreateNetworkInterfacesHandler,
 		firecracker.LoadSnapshotHandler,
 	)
 
