@@ -120,9 +120,9 @@ func newMachineFromSnapshot(ctx context.Context, binaryPath string, cfg machineC
 	}
 
 	fcCfg := firecracker.Config{
-		SocketPath:      cfg.socketPath,
-		KernelImagePath: cfg.kernelPath,
-		Drives:          drives,
+		SocketPath:        cfg.socketPath,
+		KernelImagePath:   cfg.kernelPath,
+		Drives:            drives,
 		NetworkInterfaces: networkInterfaces,
 		MachineCfg: fcmodels.MachineConfiguration{
 			VcpuCount:  firecracker.Int64(cfg.vcpuCount),
@@ -151,9 +151,32 @@ func newMachineFromSnapshot(ctx context.Context, binaryPath string, cfg machineC
 			cmd.Stderr = f
 		}
 	}
+
 	m, err := firecracker.NewMachine(vmCtx, fcCfg, firecracker.WithProcessRunner(cmd))
 	if err != nil {
 		return nil, err
 	}
+
+	// NewMachine always installs defaultHandlers which target a fresh boot:
+	// CreateMachine → CreateBootSource → AttachDrives → CreateNetworkInterfaces
+	// → (no LoadSnapshot).  startInstance() is a no-op when Snapshot is set,
+	// so the VM is never actually loaded or started.
+	//
+	// Override with the correct chain: configure host resources the restored
+	// VM needs (drives, network) then load the snapshot.
+	m.Handlers.Validation = firecracker.HandlerList{}.Append(
+		firecracker.NetworkConfigValidationHandler,
+		firecracker.LoadSnapshotConfigValidationHandler,
+	)
+	m.Handlers.FcInit = firecracker.HandlerList{}.Append(
+		firecracker.SetupNetworkHandler,
+		firecracker.StartVMMHandler,
+		firecracker.CreateLogFilesHandler,
+		firecracker.BootstrapLoggingHandler,
+		firecracker.AttachDrivesHandler,
+		firecracker.CreateNetworkInterfacesHandler,
+		firecracker.LoadSnapshotHandler,
+	)
+
 	return &fcMachine{Machine: m}, nil
 }
