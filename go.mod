@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/firecracker-microvm/firecracker-go-sdk v1.0.0
 	github.com/jackc/pgx/v5 v5.8.0
+	gopkg.in/yaml.v2 v2.4.0
 )
 
 require (
@@ -58,5 +59,4 @@ require (
 	golang.org/x/sync v0.17.0 // indirect
 	golang.org/x/sys v0.26.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
-	gopkg.in/yaml.v2 v2.4.0 // indirect
 )

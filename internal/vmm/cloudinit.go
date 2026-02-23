@@ -5,9 +5,75 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"gopkg.in/yaml.v2"
 )
 
 const defaultUserData = "#cloud-config\n"
+
+// patchHomeOwnership parses a cloud-config user-data string and, for every
+// user defined in the "users" block, prepends runcmd entries that fix
+// /home/<user> ownership. This is necessary because cloud-init's write_files
+// module runs before home directories are created, so any write_files entry
+// that targets /home/<user>/... causes cloud-init to create the directory as
+// root:root. The prepended chown/chmod commands run early in runcmd and
+// correct ownership before anything else touches the home directory.
+func patchHomeOwnership(userData string) (string, error) {
+	header := "#cloud-config"
+	body := userData
+	if strings.HasPrefix(userData, header) {
+		body = userData[len(header):]
+	}
+
+	var cfg map[interface{}]interface{}
+	if err := yaml.Unmarshal([]byte(body), &cfg); err != nil || cfg == nil {
+		// Not parseable YAML – return as-is so we never break valid configs.
+		return userData, nil
+	}
+
+	usersRaw, ok := cfg["users"]
+	if !ok {
+		return userData, nil
+	}
+	userList, ok := usersRaw.([]interface{})
+	if !ok {
+		return userData, nil
+	}
+
+	var fixCmds []interface{}
+	for _, u := range userList {
+		uMap, ok := u.(map[interface{}]interface{})
+		if !ok {
+			continue
+		}
+		name, ok := uMap["name"].(string)
+		if !ok || name == "" {
+			continue
+		}
+		home := fmt.Sprintf("/home/%s", name)
+		if h, ok := uMap["home"].(string); ok && h != "" {
+			home = h
+		}
+		fixCmds = append(fixCmds,
+			[]interface{}{"chown", "-R", fmt.Sprintf("%s:%s", name, name), home},
+			[]interface{}{"chmod", "700", home},
+		)
+	}
+
+	if len(fixCmds) == 0 {
+		return userData, nil
+	}
+
+	existing, _ := cfg["runcmd"].([]interface{})
+	cfg["runcmd"] = append(fixCmds, existing...)
+
+	patched, err := yaml.Marshal(cfg)
+	if err != nil {
+		return userData, nil
+	}
+	return header + "\n" + string(patched), nil
+}
 
 // InjectCloudInitSeed writes NoCloud seed files (meta-data, user-data,
 // network-config) directly into the per-VM rootfs at the well-known path
@@ -31,6 +97,11 @@ func InjectCloudInitSeed(ctx context.Context, rootfsPath, vmDir, instanceID, mac
 
 	if userData == "" {
 		userData = defaultUserData
+	}
+	var err error
+	userData, err = patchHomeOwnership(userData)
+	if err != nil {
+		return fmt.Errorf("patch home ownership: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(srcDir, "user-data"), []byte(userData), 0o644); err != nil {
 		return fmt.Errorf("write user-data: %w", err)
