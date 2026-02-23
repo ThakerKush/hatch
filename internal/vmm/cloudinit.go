@@ -121,13 +121,6 @@ func InjectCloudInitSeed(ctx context.Context, rootfsPath, vmDir, instanceID, mac
 	}
 	defer os.RemoveAll(mountDir)
 
-	// After a host reboot, /dev/loopN device nodes may not exist yet even
-	// though the loop kernel module is loaded. Create them so mount -o loop
-	// can allocate one.
-	for i := 0; i < 8; i++ {
-		_ = run(ctx, "mknod", "-m", "0660", fmt.Sprintf("/dev/loop%d", i), "b", "7", fmt.Sprintf("%d", i))
-	}
-
 	if err := run(ctx, "mount", "-o", "loop", rootfsPath, mountDir); err != nil {
 		return fmt.Errorf("mount rootfs: %w", err)
 	}

@@ -121,6 +121,14 @@ func (m *Manager) reconcileOnStartup(cfg config.Config) {
 	//    This avoids stale ARP entries and bridge-level state.
 	_ = run(ctx, "ip", "link", "del", cfg.BridgeName)
 	m.bridgeReady = false
+
+	// 4. Ensure /dev/loopN device nodes exist. The container gets a fresh
+	//    /dev tmpfs on each start, and after a host reboot the nodes may
+	//    not be populated even though the loop kernel module is loaded.
+	for i := 0; i < 8; i++ {
+		_ = run(ctx, "mknod", "-m", "0660", fmt.Sprintf("/dev/loop%d", i), "b", "7", fmt.Sprintf("%d", i))
+	}
+
 	slog.Info("startup reconciliation complete")
 }
 
