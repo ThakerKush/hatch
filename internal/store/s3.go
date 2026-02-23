@@ -107,31 +107,40 @@ func (c *S3Client) Download(ctx context.Context, key, dest string) error {
 }
 
 // UploadFileCompressed gzip-compresses a local file and uploads it to S3.
+// Compression is written to a temp file so the AWS SDK can seek the body
+// for payload signing and retries.
 func (c *S3Client) UploadFileCompressed(ctx context.Context, key, filePath string) error {
 	slog.Info("uploading compressed to S3", "bucket", c.bucket, "key", key)
 
-	f, err := os.Open(filePath)
+	src, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("open file for compressed upload: %w", err)
 	}
-	defer f.Close()
+	defer src.Close()
 
-	pr, pw := io.Pipe()
-	go func() {
-		gw := gzip.NewWriter(pw)
-		_, copyErr := io.Copy(gw, f)
-		closeErr := gw.Close()
-		if copyErr != nil {
-			pw.CloseWithError(copyErr)
-		} else {
-			pw.CloseWithError(closeErr)
-		}
-	}()
+	tmp, err := os.CreateTemp("", "hatch-gz-*")
+	if err != nil {
+		return fmt.Errorf("create temp file for compressed upload: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+
+	gw := gzip.NewWriter(tmp)
+	if _, err := io.Copy(gw, src); err != nil {
+		return fmt.Errorf("compress file: %w", err)
+	}
+	if err := gw.Close(); err != nil {
+		return fmt.Errorf("finalize gzip: %w", err)
+	}
+
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seek compressed file: %w", err)
+	}
 
 	_, err = c.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
-		Body:   pr,
+		Body:   tmp,
 	})
 	if err != nil {
 		return fmt.Errorf("s3 upload compressed %s: %w", key, err)
