@@ -89,24 +89,51 @@ func NewManager(cfg config.Config, db *store.DB, s3 *store.S3Client) (*Manager, 
 		slog.Warn("marked stale VMs from previous run", "count", stale)
 	}
 
-	// Remove any TAP devices left on the host from a previous process run.
-	// Kernel interfaces persist across container/process restarts, so without
-	// this they accumulate indefinitely.
-	keepTaps := make(map[string]struct{})
-	if allVMs, err := db.ListVMs(); err == nil {
-		for _, vm := range allVMs {
-			if vm.TapName != "" {
-				keepTaps[vm.TapName] = struct{}{}
-			}
+	m.reconcileOnStartup(cfg)
+
+	return m, nil
+}
+
+// reconcileOnStartup cleans up all host-side resources from a previous
+// process run. After a restart no Firecracker processes are alive, so every
+// TAP device and iptables SSH-forward rule on the host is stale. Cleaning
+// them here means rebuilds/restarts always begin from a known-good state;
+// resources are re-created when VMs are started or restored.
+func (m *Manager) reconcileOnStartup(cfg config.Config) {
+	ctx := context.Background()
+
+	allVMs, err := m.db.ListVMs()
+	if err != nil {
+		slog.Warn("startup reconciliation: failed to list VMs", "error", err)
+		return
+	}
+
+	// 1. Tear down iptables SSH-forward rules for every VM in the DB.
+	//    They all point at dead Firecracker processes.
+	iptablesRemoved := 0
+	for _, vm := range allVMs {
+		if vm.SSHPort > 0 && vm.GuestIP != "" {
+			teardownSSHForward(ctx, vm.SSHPort, vm.GuestIP, cfg.SSHAllowedCIDR)
+			iptablesRemoved++
 		}
 	}
-	if removed, err := ReconcileTaps(context.Background(), "fctap-", keepTaps); err != nil {
+	if iptablesRemoved > 0 {
+		slog.Info("cleaned up stale iptables SSH rules", "count", iptablesRemoved)
+	}
+
+	// 2. Remove ALL fctap-* TAP devices. No VMs are running after a restart,
+	//    so every TAP on the host is orphaned.
+	if removed, err := ReconcileTaps(ctx, "fctap-", nil); err != nil {
 		slog.Warn("tap reconciliation failed", "error", err)
 	} else if removed > 0 {
 		slog.Info("cleaned up stale tap devices", "count", removed)
 	}
 
-	return m, nil
+	// 3. Delete the bridge so it's re-created fresh by ensureBridge.
+	//    This avoids stale ARP entries and bridge-level state.
+	_ = run(ctx, "ip", "link", "del", cfg.BridgeName)
+	m.bridgeReady = false
+	slog.Info("startup reconciliation complete")
 }
 
 // ---------- Create ----------
