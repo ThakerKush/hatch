@@ -67,9 +67,15 @@ func (d *DHCPServer) Start() error {
 		return fmt.Errorf("create DHCP data dir: %w", err)
 	}
 
-	// dnsmasq requires the hosts file to exist at startup.
+	// Truncate the hosts file (fresh start, entries added per-VM) and the
+	// lease file (all leases from a previous run are stale — VMs are dead
+	// after a daemon restart). Without truncating leases, dnsmasq honours
+	// old leases for different MACs and ignores our static allocations.
 	if err := os.WriteFile(d.hostsFile, []byte{}, 0o644); err != nil {
 		return fmt.Errorf("create DHCP hosts file: %w", err)
+	}
+	if err := os.WriteFile(d.leaseFile, []byte{}, 0o644); err != nil {
+		return fmt.Errorf("truncate DHCP lease file: %w", err)
 	}
 
 	dhcpRange := fmt.Sprintf("%s,%s,%s,12h", d.rangeStart, d.rangeEnd, d.subnetMask)

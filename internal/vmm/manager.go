@@ -102,23 +102,11 @@ func NewManager(cfg config.Config, db *store.DB, s3 *store.S3Client) (*Manager, 
 func (m *Manager) reconcileOnStartup(cfg config.Config) {
 	ctx := context.Background()
 
-	allVMs, err := m.db.ListVMs()
-	if err != nil {
-		slog.Warn("startup reconciliation: failed to list VMs", "error", err)
-		return
-	}
-
-	// 1. Tear down iptables SSH-forward rules for every VM in the DB.
-	//    They all point at dead Firecracker processes.
-	iptablesRemoved := 0
-	for _, vm := range allVMs {
-		if vm.SSHPort > 0 && vm.GuestIP != "" {
-			teardownSSHForward(ctx, vm.SSHPort, vm.GuestIP, cfg.SSHAllowedCIDR)
-			iptablesRemoved++
-		}
-	}
-	if iptablesRemoved > 0 {
-		slog.Info("cleaned up stale iptables SSH rules", "count", iptablesRemoved)
+	// 1. Flush ALL iptables SSH rules by scanning the chains. This is more
+	//    robust than per-VM teardown: it catches orphaned rules from VMs that
+	//    were deleted from the DB, and rules created with a different CIDR.
+	if removed := flushStaleSSHRules(ctx, cfg.SSHPortMin, cfg.SSHPortMax); removed > 0 {
+		slog.Info("cleaned up stale iptables SSH rules", "count", removed)
 	}
 
 	// 2. Remove ALL fctap-* TAP devices. No VMs are running after a restart,

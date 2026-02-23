@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os/exec"
 	"strconv"
+	"strings"
 )
 
 type table string
@@ -207,4 +209,83 @@ func teardownSSHForward(ctx context.Context, hostPort int, guestIP, allowedCIDR 
 		return
 	}
 	teardownRules(ctx, sshRules(hostPort, guestIP, allowedCIDR))
+}
+
+// flushStaleSSHRules scans the iptables nat and filter tables and removes
+// every rule related to SSH port forwarding. This is more robust than
+// per-VM teardown because it catches orphaned rules from VMs that were
+// deleted from the DB, and rules created with a different SSH allowed CIDR.
+func flushStaleSSHRules(ctx context.Context, portMin, portMax int) int {
+	type chainSpec struct {
+		table string
+		chain string
+		match func(string) bool
+	}
+
+	specs := []chainSpec{
+		{
+			table: "nat",
+			chain: "PREROUTING",
+			match: func(line string) bool {
+				if !strings.Contains(line, "DNAT") {
+					return false
+				}
+				p := extractDport(line)
+				return p >= portMin && p <= portMax
+			},
+		},
+		{
+			table: "nat",
+			chain: "POSTROUTING",
+			match: func(line string) bool {
+				return strings.Contains(line, "MASQUERADE") && strings.Contains(line, "--sport 22")
+			},
+		},
+		{
+			table: "",
+			chain: "FORWARD",
+			match: func(line string) bool {
+				return strings.Contains(line, "--dport 22") || strings.Contains(line, "--sport 22")
+			},
+		},
+	}
+
+	removed := 0
+	for _, s := range specs {
+		listArgs := []string{"-S", s.chain}
+		if s.table != "" {
+			listArgs = []string{"-t", s.table, "-S", s.chain}
+		}
+
+		out, err := exec.CommandContext(ctx, "iptables", listArgs...).CombinedOutput()
+		if err != nil {
+			continue
+		}
+
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if !strings.HasPrefix(line, "-A ") || !s.match(line) {
+				continue
+			}
+			delLine := "-D" + line[2:]
+			delArgs := strings.Fields(delLine)
+			if s.table != "" {
+				delArgs = append([]string{"-t", s.table}, delArgs...)
+			}
+			if err := run(ctx, "iptables", delArgs...); err == nil {
+				removed++
+			}
+		}
+	}
+	return removed
+}
+
+func extractDport(line string) int {
+	fields := strings.Fields(line)
+	for i, f := range fields {
+		if f == "--dport" && i+1 < len(fields) {
+			port, _ := strconv.Atoi(fields[i+1])
+			return port
+		}
+	}
+	return 0
 }
