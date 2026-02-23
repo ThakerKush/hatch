@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 
 	"github.com/ThakerKush/Hatch/internal/config"
@@ -167,18 +168,37 @@ func (r createTemplateRequest) ToTemplate(cfg config.Config) store.Template {
 
 // --- Proxy Route ---
 
+var (
+	subdomainRe       = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	reservedSubdomains = map[string]struct{}{
+		"api": {}, "www": {}, "admin": {}, "app": {}, "dashboard": {},
+		"mail": {}, "smtp": {}, "ftp": {}, "ssh": {}, "ns1": {}, "ns2": {},
+		"status": {}, "docs": {}, "help": {}, "support": {}, "billing": {},
+		"login": {}, "auth": {}, "oauth": {}, "cdn": {}, "static": {},
+		"assets": {}, "media": {}, "hatch": {}, "console": {}, "panel": {},
+		"grafana": {}, "prometheus": {}, "traefik": {}, "minio": {},
+		"postgres": {}, "db": {}, "redis": {}, "internal": {},
+	}
+)
+
 type createRouteRequest struct {
-	Subdomain  string `json:"subdomain"`
+	Subdomain  string `json:"subdomain,omitempty"`
 	TargetPort int    `json:"target_port"`
 	AutoWake   *bool  `json:"auto_wake"`
 }
 
-func (r createRouteRequest) Validate() error {
-	if r.Subdomain == "" {
-		return errors.New("subdomain is required")
-	}
+func (r *createRouteRequest) Validate() error {
 	if r.TargetPort <= 0 || r.TargetPort > 65535 {
 		return errors.New("target_port must be between 1 and 65535")
+	}
+	if r.Subdomain == "" {
+		r.Subdomain = util.RandomID("")[:12]
+	}
+	if !subdomainRe.MatchString(r.Subdomain) {
+		return errors.New("subdomain must be lowercase alphanumeric with optional hyphens (max 63 chars)")
+	}
+	if _, ok := reservedSubdomains[r.Subdomain]; ok {
+		return fmt.Errorf("subdomain %q is reserved", r.Subdomain)
 	}
 	return nil
 }

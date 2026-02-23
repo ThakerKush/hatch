@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -273,9 +274,12 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		// Verify VM exists.
 		if _, ok := s.vmm.Get(id); !ok {
 			writeError(w, http.StatusNotFound, errNotFound)
+			return
+		}
+		if existing, _ := s.db.GetRouteBySubdomain(req.Subdomain); existing != nil {
+			writeError(w, http.StatusConflict, fmt.Errorf("subdomain %q is already in use", req.Subdomain))
 			return
 		}
 		route := req.ToRoute(id)
