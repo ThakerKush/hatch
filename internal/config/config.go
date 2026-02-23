@@ -87,8 +87,8 @@ func LoadFromEnv() Config {
 		S3SecretKey: envOrDefault("HATCH_S3_SECRET_KEY", ""),
 
 		// Idle monitor
-		IdleCheckInterval: envOrDefaultDuration("HATCH_IDLE_CHECK_INTERVAL", 1*time.Minute),
-		IdleTimeout:       envOrDefaultDuration("HATCH_IDLE_TIMEOUT", 10*time.Minute),
+		IdleCheckInterval: envOrDefaultDuration("HATCH_IDLE_CHECK_INTERVAL", 5*time.Minute),
+		IdleTimeout:       envOrDefaultDuration("HATCH_IDLE_TIMEOUT", 45*time.Minute),
 	}
 }
 

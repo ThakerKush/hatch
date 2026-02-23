@@ -114,7 +114,7 @@ curl -sS -X POST localhost:8080/vms/<vm-id>/restore
 curl -sS localhost:8080/vms/<vm-id>/snapshots
 ```
 
-Idle VMs with proxy routes are auto-snapshotted after `HATCH_IDLE_TIMEOUT` (default 10m). When a request arrives for a snapshotted VM, the proxy auto-restores it.
+Idle VMs with proxy routes are auto-snapshotted after `HATCH_IDLE_TIMEOUT` (default 45m). VMs with active SSH sessions are never snapshotted. When a request arrives for a snapshotted VM, the proxy auto-restores it.
 
 ## API endpoints
 
@@ -188,6 +188,60 @@ Hatch images are simple pointers to kernel + rootfs files. Hatch does not build 
 | `HATCH_S3_REGION` | `us-east-1` | S3 region |
 | `HATCH_S3_ACCESS_KEY` | | S3 access key |
 | `HATCH_S3_SECRET_KEY` | | S3 secret key |
-| `HATCH_IDLE_CHECK_INTERVAL` | `1m` | How often to check for idle VMs |
-| `HATCH_IDLE_TIMEOUT` | `10m` | Idle time before auto-snapshot |
+| `HATCH_IDLE_CHECK_INTERVAL` | `5m` | How often to check for idle VMs |
+| `HATCH_IDLE_TIMEOUT` | `45m` | Idle time before auto-snapshot (skips VMs with active SSH) |
 
+## Roadmap
+
+**Snapshot & restore performance**
+- Local snapshot cache to skip S3 round-trips on recent restores
+- Incremental / diff snapshots (only upload changed memory pages)
+- Parallel upload/download of snapshot artefacts
+- Memory snapshot compression tuning (zstd instead of gzip, configurable level)
+- Target: sub-5s restore for warm cache, sub-15s cold
+
+**Networking**
+- Per-VM egress bandwidth limits (tc/qdisc)
+- IPv6 support on the bridge
+- WireGuard overlay for multi-node clusters
+- DNS-per-VM (each VM gets its own `<vmid>.internal` record)
+
+**Multi-tenancy & auth**
+- API key / JWT authentication
+- Per-tenant resource quotas (vCPU, memory, VM count, snapshot storage)
+- Tenant isolation (separate bridges / IP ranges)
+
+**Scheduler & multi-node**
+- Horizontal scaling — distribute VMs across multiple hosts
+- Placement strategy (bin-packing, spread, GPU affinity)
+- Live migration between nodes using snapshot/restore
+- Shared storage backend (NFS / Ceph) for rootfs and snapshots
+
+**Cloud-Hypervisor support**
+- Full VM support via Cloud-Hypervisor (PCI passthrough, GPU, larger VMs)
+- Firecracker for lightweight / ephemeral workloads, Cloud-Hypervisor for heavy / persistent ones
+- Unified API — same endpoints, hypervisor choice per template
+
+**Developer experience**
+- CLI tool (`hatch create`, `hatch ssh`, `hatch snapshot`, etc.)
+- Web dashboard for VM management
+- WebSocket terminal (browser-based SSH)
+- Pre-built golden images (Ubuntu, Debian, Alpine) with cloud-init baked in
+- `hatch init` scaffolding for new projects
+
+**Observability**
+- Prometheus metrics (VM count, snapshot durations, restore latency, resource usage)
+- Per-VM CPU / memory / network usage via Firecracker metrics
+- Structured log export (JSON → log aggregator)
+- Alerting on failed snapshots / restores
+
+**Storage**
+- Persistent volume attach/detach (extra block devices per VM)
+- Shared filesystem mounts (virtio-fs / 9p)
+- Snapshot garbage collection (keep N most recent, age-based expiry)
+
+**Security**
+- Firecracker jailer integration (rootless VMs)
+- Seccomp profiles for the daemon
+- VM-level firewall rules (per-VM egress allow/deny lists)
+- Encrypted snapshots at rest

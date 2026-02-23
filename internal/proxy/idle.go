@@ -2,7 +2,10 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/ThakerKush/Hatch/internal/store"
@@ -87,6 +90,12 @@ func (m *IdleMonitor) check() {
 			continue
 		}
 
+		if vm.SSHPort > 0 && hasActiveSSHSessions(vm.SSHPort) {
+			slog.Debug("skipping idle snapshot, active SSH session",
+				"vm", route.VMID, "ssh_port", vm.SSHPort)
+			continue
+		}
+
 		slog.Info("vm idle, triggering snapshot",
 			"vm", route.VMID,
 			"subdomain", route.Subdomain,
@@ -99,4 +108,20 @@ func (m *IdleMonitor) check() {
 		}
 		cancel()
 	}
+}
+
+// hasActiveSSHSessions checks the kernel conntrack table for established TCP
+// connections on the given host port (the DNAT'd SSH forwarding port).
+func hasActiveSSHSessions(sshPort int) bool {
+	data, err := os.ReadFile("/proc/net/nf_conntrack")
+	if err != nil {
+		return false
+	}
+	needle := fmt.Sprintf("dport=%d", sshPort)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, "ESTABLISHED") && strings.Contains(line, needle) {
+			return true
+		}
+	}
+	return false
 }
