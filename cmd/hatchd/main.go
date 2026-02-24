@@ -117,6 +117,8 @@ func main() {
 
 	// ── Reverse Proxy ────────────────────────────────────────────────────
 	proxyHandler := proxy.New(db, manager, cfg.ProxyBaseDomain, cfg.ProxyWakeTimeout)
+	sshGateway := proxy.NewSSHGateway(db, manager, cfg.ProxyWakeTimeout)
+	sshGateway.Start()
 
 	proxyServer := &http.Server{
 		Addr:              cfg.ProxyAddr,
@@ -149,6 +151,7 @@ func main() {
 	if idleMon != nil {
 		idleMon.Stop()
 	}
+	sshGateway.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

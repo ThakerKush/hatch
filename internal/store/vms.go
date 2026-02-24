@@ -66,6 +66,14 @@ func (d *DB) GetVM(id string) (*VM, error) {
 	))
 }
 
+// GetVMBySSHPort retrieves a VM by its forwarded SSH host port.
+// Returns nil if no VM is assigned to the port.
+func (d *DB) GetVMBySSHPort(port int) (*VM, error) {
+	return scanVMRow(d.db.QueryRow(
+		`SELECT `+vmColumns+` FROM vms WHERE ssh_port = $1`, port,
+	))
+}
+
 // ListVMs returns all VM records.
 func (d *DB) ListVMs() ([]VM, error) {
 	rows, err := d.db.Query(
