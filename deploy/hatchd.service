@@ -1,0 +1,17 @@
+[Unit]
+Description=Hatch daemon
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/hatch
+EnvironmentFile=/root/hatch/.env
+ExecStart=/root/hatch/hatchd
+Restart=always
+RestartSec=2
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
