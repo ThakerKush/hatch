@@ -84,5 +84,8 @@ Temporary Items
 # Personal debugging file
 DEBUGGING.md
 
+# Firecrackery binary 
+firecracker/
+
 # Environment secrets
 .env

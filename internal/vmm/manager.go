@@ -348,6 +348,25 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 
 	// Clean up associated proxy routes and snapshots.
 	_ = m.db.DeleteRoutesByVM(id)
+	snaps, err := m.db.ListSnapshots(id)
+	if err != nil {
+		return fmt.Errorf("list snapshots for vm delete: %w", err)
+	}
+	if len(snaps) > 0 {
+		if m.s3 == nil {
+			return fmt.Errorf("cannot delete %d snapshot(s) from S3: snapshot storage is not configured", len(snaps))
+		}
+		for _, snap := range snaps {
+			for _, key := range []string{snap.StateKey, snap.MemoryKey, snap.DiskKey} {
+				if key == "" {
+					continue
+				}
+				if err := m.s3.Delete(ctx, key); err != nil {
+					return fmt.Errorf("delete snapshot object %q: %w", key, err)
+				}
+			}
+		}
+	}
 	_ = m.db.DeleteSnapshotsByVM(id)
 	if err := m.db.DeleteVM(id); err != nil {
 		return err
