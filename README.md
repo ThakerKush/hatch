@@ -1,247 +1,197 @@
 # Hatch
+Hatch is a wrapper around Firecracker for spnning up microVMs, designed for agentic workloads, with a REST api for lifecycle mangement, wake-on-request, snapshot/restore for idel VMs and subdomain-based reverse proxy. 
 
-Hatch is a single-tenant Firecracker control plane for spinning up microVMs — designed for AI agent workloads. It provides a REST API for VM lifecycle management, a subdomain-based reverse proxy with wake-on-request, automatic snapshot/restore for idle VMs, and reusable VM templates.
+### Setup: 
 
-## Features
+**Prerequisites**
+- Linux machine with KVM enabled (`ls /dev/kvm && echo "KVM enabled" || echo "KVM not enabled"`)
+- Dependencies Installed ( run `hatch/scripts/install-deps.sh` to install dependencies )
+- Postgres 
+- S3-compatable storage if you want snapshot/restore
 
-- **VM lifecycle** — create, stop, delete microVMs via REST API
-- **Automatic networking** — bridge + TAP + DHCP + cloud-init, fully automated
-- **Templates** — reusable VM configs (image + cloud-init + resource defaults)
-- **Reverse proxy** — subdomain-based routing (`vm123.yourdomain.com` → VM guest IP)
-- **Wake-on-request** — snapshotted VMs auto-restore when traffic arrives
-- **Snapshot / restore** — Firecracker native snapshots stored in S3-compatible storage
-- **Idle detection** — VMs with no proxy traffic get auto-snapshotted after a configurable timeout
-- **SSH access ports** — each networked VM gets a host `ssh_port` forwarded to guest `:22`
-- **PostgreSQL** — persistent state for VMs, images, templates, snapshots, routes
-- **HTTPS via Traefik** — automatic wildcard TLS certs, internet-ready
-- **Docker Compose** — one command to run Hatch + Traefik + Postgres + MinIO
+`scripts/install-deps.sh` installs Firecracker, dnsmasq, kernel, rootfs, and system networking tools, then prints the env vars to paste into .env.
 
-## Quick start
-
-### Docker Compose (recommended)
-
-On your Linux VPS with KVM and Firecracker installed:
-
+**Run** 
 ```bash
-git clone <your-repo> && cd hatch
-
-# Configure your domain and credentials
-cp .env.example .env
-# Edit .env: set HATCH_BASE_DOMAIN, ACME_EMAIL, CF_DNS_API_TOKEN
-# Edit traefik/dynamic.yml: replace "yourdomain.com" with your domain
-
+#docker compose brings up Postgres + MinIO
 docker compose up -d
+
+##hatch 
+sudo go run ./cmd/hatchd
 ```
 
-**DNS setup:** create a wildcard `A` record `*.yourdomain.com` pointing to this server's public IP.
-
-This starts:
-- **Traefik** — edge proxy with automatic HTTPS (`:80`, `:443`)
-- **Hatch** daemon — API (localhost `:8080`), VM proxy (localhost `:9090`)
-- **PostgreSQL** on `:5432`
-- **MinIO** (S3-compatible) on `:9000` (console on `:9001`)
-
-### Manual (Linux host)
-
-Prerequisites: `firecracker`, `dnsmasq-base`, `e2fsprogs`, a running PostgreSQL.
-
-```bash
-export DATABASE_URL="postgres://hatch:hatch@localhost:5432/hatch?sslmode=disable"
-go run ./cmd/hatchd
-```
-
-## API usage
-
-### Register an image
-
-```bash
-curl -sS -X POST localhost:8080/images \
+**First VM**
+```bash 
+curl -X POST localhost:8080/vms \
   -H 'content-type: application/json' \
   -d '{
-    "kernel_path": "/path/to/vmlinux.bin",
-    "rootfs_path": "/path/to/rootfs.ext4"
+    "enable_network": true,
+    "user_data": "#cloud-config\nusers:\n  - name: hatch\n    groups: [sudo]\n    shell: /bin/bash\n    sudo: [\"ALL=(ALL) NOPASSWD:ALL\"]\n    ssh_authorized_keys:\n      - <your-public-key>"
   }'
+
+  ssh -p <ssh_port> hatch@<host-ip>
 ```
 
-### Create a template
+
+### Architecture overview
+
+![architecture](/docs/images/architecture.png)
+
+
+### Networking — bridge, TAP, and DHCP
+
+When a networked VM is created, Hatch sets up a full Linux networking stack on the host before Firecracker ever starts:
+
+1. **Bridge (`fcbr0`)** — a Layer 2 virtual switch created once, shared across all VMs. It gets the gateway IP (`172.16.0.1`) and is where `dnsmasq` listens to serve DHCP.
+
+2. **TAP device (`fctap-<vmid>`)** — one per VM, created on the host and plugged into the bridge as a port. Firecracker holds the other end as a file descriptor and uses it to send and receive raw Ethernet frames. From the guest's perspective it looks like a regular NIC (`eth0`).
+
+3. **IP + MAC allocation** — Hatch generates a random MAC and picks the next free IP from the bridge subnet, entirely on the host before the VM starts.
+
+4. **DHCP reservation** — the MAC → IP mapping is written into dnsmasq's hosts file and dnsmasq is signalled (`SIGHUP`) to reload. The DHCP is deterministic: the IP is pre-decided on the host, dnsmasq just delivers it to the guest.
+
+5. **cloud-init injection** — Hatch loop-mounts the VM's rootfs image on the host and writes a `network-config` file into `/var/lib/cloud/seed/nocloud/` inside it:
+   ```yaml
+   version: 2
+   ethernets:
+     eth0:
+       match:
+         macaddress: "aa:bb:cc:dd:ee:ff"
+       dhcp4: true
+   ```
+   When the guest boots, cloud-init finds this file and runs DHCP on `eth0`. The request travels `eth0 → TAP → bridge → dnsmasq`, and the guest gets back exactly the IP Hatch pre-allocated. No manual configuration inside the guest.
+
+6. **NAT** — iptables MASQUERADE rule on the bridge subnet lets VMs reach the internet through the host's real NIC.
+
+```
+DHCP flow:
+
+  guest eth0 ──► TAP fctap-xxxx ──► bridge fcbr0 ──► dnsmasq
+                                                         │
+                                      DHCPACK ◄──────────┘
+  guest gets: IP 172.16.0.10, GW 172.16.0.1, DNS 8.8.8.8
+```
+
+### SSH forwarding
+
+Each networked VM gets a dedicated host port (in the range `HATCH_SSH_PORT_MIN`–`HATCH_SSH_PORT_MAX`) forwarded to guest `:22` via iptables DNAT:
+
+```
+ssh -p 16000 user@host
+  ─► host:16000
+  ─► iptables PREROUTING DNAT ─► 172.16.0.10:22
+  ─► bridge ─► TAP ─► VM eth0 ─► sshd
+```
+
+The SSH gateway also handles **wake-on-SSH**: if a VM is snapshotted when you try to connect, Hatch restores it first and then forwards your connection — your SSH client just sees a slow handshake.
+
+### Subdomain reverse proxy
+
+Hatch runs a second HTTP server (`:9090`) that routes incoming requests to VMs by subdomain. You register a route per VM:
 
 ```bash
-curl -sS -X POST localhost:8080/templates \
-  -H 'content-type: application/json' \
-  -d '{
-    "name": "vscode-agent",
-    "image_id": "<image-id>",
-    "vcpu_count": 2,
-    "mem_mib": 1024,
-    "user_data": "#cloud-config\npackages:\n  - python3\nruncmd:\n  - curl -fsSL https://code-server.dev/install.sh | sh"
-  }'
+POST /vms/<id>/routes
+{ "subdomain": "my-agent", "target_port": 3000, "auto_wake": true }
 ```
 
-### Create a VM (from template)
+Any request to `my-agent.hatch.local` is then reverse-proxied to `172.16.0.x:3000` inside that VM. The proxy extracts the subdomain, looks up the route in Postgres, gets the VM's guest IP, and forwards. Multiple routes per VM are supported (different subdomains, different ports).
 
-```bash
-curl -sS -X POST localhost:8080/vms \
-  -H 'content-type: application/json' \
-  -d '{"template_id": "<template-id>"}'
+### Wake-on-request
+
+If `auto_wake: true` and the VM is snapshotted, the proxy doesn't return an error — it wakes the VM first (restores from S3 snapshot), then forwards the request. Concurrent wake requests for the same VM are serialised so only one restore runs at a time. This is the core serverless-VM pattern: freeze idle VMs to zero compute, wake them transparently on the next request.
+
+### Idle auto-snapshot
+
+The idle monitor runs a background loop every `HATCH_IDLE_CHECK_INTERVAL`. For each VM that has a proxy route, it tracks the last request time. When a VM has been idle longer than `HATCH_IDLE_TIMEOUT`, it is automatically snapshotted and frozen. The monitor skips VMs with active SSH sessions (detected via `/proc/net/nf_conntrack`) to avoid interrupting live work.
+
+```
+idle timer fires
+  → check last proxy request time per subdomain
+  → if idle > HATCH_IDLE_TIMEOUT and no active SSH
+  → snapshot VM to S3 → stop Firecracker process
+  → VM is now frozen at zero compute cost
+  → next HTTP request or SSH connection wakes it automatically
 ```
 
-The response includes `ssh_port` for networked VMs. Connect with:
+### Snapshots
 
-```bash
-ssh -p <ssh_port> <user>@<hatch-host-ip>
+Snapshots capture the full VM state — CPU registers, memory, and a disk delta — and upload them to S3-compatible storage. Restore downloads and replays them into a fresh Firecracker process. The VM resumes from exactly where it was paused, with the same IP, MAC, and SSH port.
+
+```
+Snapshot:  pause VM → dump memory + vmstate → diff rootfs → upload to S3 → kill Firecracker
+Restore:   download from S3 → apply disk delta → new Firecracker process → load snapshot → resume
 ```
 
-### Set up a proxy route
 
-```bash
-curl -sS -X POST localhost:8080/vms/<vm-id>/routes \
-  -H 'content-type: application/json' \
-  -d '{"subdomain": "my-agent", "target_port": 8080}'
-```
+---
 
-Now `https://my-agent.yourdomain.com` forwards to the VM's port 8080 (via Traefik → Hatch proxy).
-
-### Snapshot / restore
-
-```bash
-# Manual snapshot
-curl -sS -X POST localhost:8080/vms/<vm-id>/snapshot
-
-# Manual restore
-curl -sS -X POST localhost:8080/vms/<vm-id>/restore
-
-# List snapshots
-curl -sS localhost:8080/vms/<vm-id>/snapshots
-```
-
-Idle VMs with proxy routes are auto-snapshotted after `HATCH_IDLE_TIMEOUT` (default 45m). VMs with active SSH sessions are never snapshotted. When a request arrives for a snapshotted VM, the proxy auto-restores it.
-
-## API endpoints
+## API reference
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/healthz` | Health check with VM/route counts |
-| POST | `/images` | Register an image |
+| GET | `/healthz` | Health check with VM and route counts |
+| POST | `/images` | Register a kernel + rootfs image |
 | GET | `/images` | List images |
 | GET | `/images/{id}` | Get image |
 | DELETE | `/images/{id}` | Delete image |
-| POST | `/templates` | Create template |
+| POST | `/templates` | Create a template |
 | GET | `/templates` | List templates |
 | GET | `/templates/{id}` | Get template |
 | DELETE | `/templates/{id}` | Delete template |
-| POST | `/vms` | Create VM (accepts `image_id` or `template_id`) |
-| GET | `/vms` | List VMs |
+| POST | `/vms` | Create and start a VM |
+| GET | `/vms` | List all VMs |
 | GET | `/vms/{id}` | Get VM |
-| DELETE | `/vms/{id}` | Delete VM |
-| POST | `/vms/{id}/stop` | Stop VM |
+| DELETE | `/vms/{id}` | Delete VM and release all resources |
+| POST | `/vms/{id}/stop` | Stop a running VM |
 | POST | `/vms/{id}/snapshot` | Snapshot VM to S3 |
 | POST | `/vms/{id}/restore` | Restore VM from latest snapshot |
 | GET | `/vms/{id}/snapshots` | List snapshots for a VM |
-| POST | `/vms/{id}/routes` | Create proxy route |
-| GET | `/vms/{id}/routes` | List proxy routes |
-| DELETE | `/routes/{id}` | Delete proxy route |
+| POST | `/vms/{id}/routes` | Create a proxy route |
+| GET | `/vms/{id}/routes` | List proxy routes for a VM |
+| DELETE | `/routes/{id}` | Delete a proxy route |
 
-## Networking
-
-Hatch creates a Linux bridge (`fcbr0` by default) and attaches per-VM TAP devices.
-
-1. On first VM, Hatch starts `dnsmasq` DHCP on the bridge.
-2. Each VM gets an allocated IP with a static DHCP reservation (MAC -> IP).
-3. A cloud-init NoCloud seed disk configures DHCP on the guest NIC.
-4. Guest boots, cloud-init runs, network is up — fully automatic.
-
-For internet access from VMs:
-
-```bash
-sudo sysctl -w net.ipv4.ip_forward=1
-sudo iptables -t nat -A POSTROUTING -s 172.16.0.0/24 ! -o fcbr0 -j MASQUERADE
-```
-
-## Image strategy
-
-Hatch images are simple pointers to kernel + rootfs files. Hatch does not build images.
-
-- **Day 1:** Build rootfs externally (Dockerfile-to-ext4, debootstrap, cloud image download) and register via `POST /images`.
-- **Day 2:** Create templates that bundle image + cloud-init + defaults. One API call spins up a pre-configured VM.
-- **Day 3:** Boot a VM from a template, wait for cloud-init, snapshot it. Restore copies for instant boot with everything pre-installed (golden snapshot pattern).
-
-## Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `HATCH_HTTP_ADDR` | `:8080` | API listen address |
-| `HATCH_PROXY_ADDR` | `:9090` | Reverse proxy listen address |
-| `HATCH_PROXY_BASE_DOMAIN` | `hatch.local` | Base domain for subdomain routing |
-| `HATCH_PROXY_WAKE_TIMEOUT` | `60s` | Max time to wait for VM restore |
-| `HATCH_SSH_PORT_MIN` | `16000` | Minimum host port for VM SSH forwarding |
-| `HATCH_SSH_PORT_MAX` | `26000` | Maximum host port for VM SSH forwarding |
-| `HATCH_SSH_ALLOWED_CIDR` | `127.0.0.1/32` | Source CIDR allowed to reach forwarded SSH ports |
-| `HATCH_DATA_DIR` | `./data` | Local data directory |
-| `DATABASE_URL` | `postgres://hatch:hatch@localhost:5432/hatch?sslmode=disable` | PostgreSQL connection string |
-| `HATCH_FIRECRACKER_BIN` | `firecracker` | Firecracker binary path |
-| `HATCH_BRIDGE_NAME` | `fcbr0` | Bridge interface name |
-| `HATCH_BRIDGE_CIDR` | `172.16.0.1/24` | Bridge IP/subnet |
-| `HATCH_DEFAULT_VCPU` | `1` | Default vCPUs per VM |
-| `HATCH_DEFAULT_MEM_MIB` | `256` | Default memory (MiB) per VM |
-| `HATCH_S3_ENDPOINT` | | S3 endpoint (e.g. `http://localhost:9000` for MinIO) |
-| `HATCH_S3_BUCKET` | | S3 bucket for snapshots |
-| `HATCH_S3_REGION` | `us-east-1` | S3 region |
-| `HATCH_S3_ACCESS_KEY` | | S3 access key |
-| `HATCH_S3_SECRET_KEY` | | S3 secret key |
-| `HATCH_IDLE_CHECK_INTERVAL` | `5m` | How often to check for idle VMs |
-| `HATCH_IDLE_TIMEOUT` | `45m` | Idle time before auto-snapshot (skips VMs with active SSH) |
+---
 
 ## Roadmap
 
-**Snapshot & restore performance**
-- Local snapshot cache to skip S3 round-trips on recent restores
-- Incremental / diff snapshots (only upload changed memory pages)
-- Parallel upload/download of snapshot artefacts
-- Memory snapshot compression tuning (zstd instead of gzip, configurable level)
+**Performance**
+- Local snapshot cache to skip S3 round-trips on warm restores
+- Diff/incremental snapshots (upload only changed memory pages)
 - Target: sub-5s restore for warm cache, sub-15s cold
 
 **Networking**
 - Per-VM egress bandwidth limits (tc/qdisc)
 - IPv6 support on the bridge
 - WireGuard overlay for multi-node clusters
-- DNS-per-VM (each VM gets its own `<vmid>.internal` record)
+- Per-VM DNS records (`<vmid>.internal`)
 
 **Multi-tenancy & auth**
 - API key / JWT authentication
-- Per-tenant resource quotas (vCPU, memory, VM count, snapshot storage)
-- Tenant isolation (separate bridges / IP ranges)
+- Per-tenant resource quotas and isolated bridges
 
 **Scheduler & multi-node**
-- Horizontal scaling — distribute VMs across multiple hosts
-- Placement strategy (bin-packing, spread, GPU affinity)
-- Live migration between nodes using snapshot/restore
-- Shared storage backend (NFS / Ceph) for rootfs and snapshots
+- Distribute VMs across multiple hosts
+- Live migration using snapshot/restore
+- Placement strategies (bin-packing, spread, GPU affinity)
 
-**Cloud-Hypervisor support**
-- Full VM support via Cloud-Hypervisor (PCI passthrough, GPU, larger VMs)
-- Firecracker for lightweight / ephemeral workloads, Cloud-Hypervisor for heavy / persistent ones
+**Hypervisor**
+- Cloud-Hypervisor support (PCI passthrough, GPU, larger VMs)
+- OCI image support
 - Unified API — same endpoints, hypervisor choice per template
 
 **Developer experience**
-- CLI tool (`hatch create`, `hatch ssh`, `hatch snapshot`, etc.)
-- Web dashboard for VM management
-- WebSocket terminal (browser-based SSH)
-- Pre-built golden images (Ubuntu, Debian, Alpine) with cloud-init baked in
-- `hatch init` scaffolding for new projects
+- CLI (`hatch create`, `hatch ssh`, `hatch snapshot`)
+- Web dashboard
+- WebSocket terminal (browser SSH)
+- TypeScript SDK
+- Pre-built golden images (Ubuntu, Debian, Alpine)
 
 **Observability**
-- Prometheus metrics (VM count, snapshot durations, restore latency, resource usage)
-- Per-VM CPU / memory / network usage via Firecracker metrics
-- Structured log export (JSON → log aggregator)
-- Alerting on failed snapshots / restores
-
-**Storage**
-- Persistent volume attach/detach (extra block devices per VM)
-- Shared filesystem mounts (virtio-fs / 9p)
-- Snapshot garbage collection (keep N most recent, age-based expiry)
+- Prometheus metrics (VM count, snapshot/restore latency, resource usage)
+- Per-VM CPU/memory/network via Firecracker metrics
+- Structured log export
 
 **Security**
 - Firecracker jailer integration (rootless VMs)
-- Seccomp profiles for the daemon
-- VM-level firewall rules (per-VM egress allow/deny lists)
 - Encrypted snapshots at rest
+- Per-VM egress firewall rules

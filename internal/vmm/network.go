@@ -26,7 +26,7 @@ func EnsureBridge(ctx context.Context, name, cidr string) error {
 			return err
 		}
 	}
-	//TODO: kinda seems redudant, we already checked if the bridge exists above
+
 	if err := run(ctx, "ip", "addr", "show", "dev", name); err != nil {
 		return err
 	}

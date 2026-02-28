@@ -80,12 +80,13 @@ func (r rule) args() []string {
 	}
 	return a
 }
-
+//does this rule exist?
 func (r rule) exists(ctx context.Context) bool {
 	args := append([]string{"-C", string(r.Chain)}, r.args()...)
 	return run(ctx, "iptables", args...) == nil
 }
 
+//add if rule does not exist
 func (r rule) add(ctx context.Context) error {
 	if r.exists(ctx) {
 		return nil
@@ -121,6 +122,7 @@ func portInUse(port int) bool {
 	return false
 }
 
+// list of rules for SSH port forwarding
 func sshRules(hostPort int, guestIP, allowedCIDR string) []rule {
 	return []rule{
 		{
