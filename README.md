@@ -130,14 +130,6 @@ Restore:   download from S3 → apply disk delta → new Firecracker process →
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/healthz` | Health check with VM and route counts |
-| POST | `/images` | Register a kernel + rootfs image |
-| GET | `/images` | List images |
-| GET | `/images/{id}` | Get image |
-| DELETE | `/images/{id}` | Delete image |
-| POST | `/templates` | Create a template |
-| GET | `/templates` | List templates |
-| GET | `/templates/{id}` | Get template |
-| DELETE | `/templates/{id}` | Delete template |
 | POST | `/vms` | Create and start a VM |
 | GET | `/vms` | List all VMs |
 | GET | `/vms/{id}` | Get VM |
@@ -154,44 +146,8 @@ Restore:   download from S3 → apply disk delta → new Firecracker process →
 
 ## Roadmap
 
-**Performance**
-- Local snapshot cache to skip S3 round-trips on warm restores
-- Diff/incremental snapshots (upload only changed memory pages)
-- Target: sub-5s restore for warm cache, sub-15s cold
-
-**Networking**
-- Per-VM egress bandwidth limits (tc/qdisc)
-- IPv6 support on the bridge
-- WireGuard overlay for multi-node clusters
-- Per-VM DNS records (`<vmid>.internal`)
-
-**Multi-tenancy & auth**
-- API key / JWT authentication
-- Per-tenant resource quotas and isolated bridges
-
-**Scheduler & multi-node**
-- Distribute VMs across multiple hosts
-- Live migration using snapshot/restore
-- Placement strategies (bin-packing, spread, GPU affinity)
-
-**Hypervisor**
-- Cloud-Hypervisor support (PCI passthrough, GPU, larger VMs)
-- OCI image support
-- Unified API — same endpoints, hypervisor choice per template
-
-**Developer experience**
-- CLI (`hatch create`, `hatch ssh`, `hatch snapshot`)
-- Web dashboard
-- WebSocket terminal (browser SSH)
-- TypeScript SDK
-- Pre-built golden images (Ubuntu, Debian, Alpine)
-
-**Observability**
-- Prometheus metrics (VM count, snapshot/restore latency, resource usage)
-- Per-VM CPU/memory/network via Firecracker metrics
-- Structured log export
-
-**Security**
-- Firecracker jailer integration (rootless VMs)
-- Encrypted snapshots at rest
-- Per-VM egress firewall rules
+- [ ] API keys and a web dashboard to create, monitor, and manage VMs without touching the API directly
+- [ ] Scheduler and multi-node support to distribute VMs across multiple hosts with live migration via snapshot/restore
+- [ ] Cloud Hypervisor support for GPU passthrough, VNC, and larger workloads alongside Firecracker for lightweight ones
+- [ ] OCI image support — pull any container image and boot it as a full VM, no rootfs conversion needed
+- [ ] Better observability — per-VM CPU/memory/network metrics and structured log export
