@@ -11,6 +11,8 @@ type Config struct {
 	// HTTP API
 	HTTPAddr string
 	DataDir  string
+	// Better Auth API key verify endpoint for Go middleware.
+	BetterAuthVerifyURL string
 
 	// Database
 	DatabaseURL string
@@ -52,8 +54,12 @@ type Config struct {
 // LoadFromEnv reads configuration from environment variables with sensible defaults.
 func LoadFromEnv() Config {
 	return Config{
-		HTTPAddr:          envOrDefault("HATCH_HTTP_ADDR", ":8080"),
-		DataDir:           envOrDefault("HATCH_DATA_DIR", "./data"),
+		HTTPAddr: envOrDefault("HATCH_HTTP_ADDR", ":8080"),
+		DataDir:  envOrDefault("HATCH_DATA_DIR", "./data"),
+		BetterAuthVerifyURL: envOrDefault(
+			"HATCH_BETTER_AUTH_VERIFY_URL",
+			"http://127.0.0.1:3000/api/auth/api-key/verify",
+		),
 		DatabaseURL:       envOrDefault("DATABASE_URL", "postgres://hatch:hatch@localhost:5432/hatch?sslmode=disable"),
 		FirecrackerBinary: envOrDefault("HATCH_FIRECRACKER_BIN", "firecracker"),
 		BridgeName:        envOrDefault("HATCH_BRIDGE_NAME", "fcbr0"),

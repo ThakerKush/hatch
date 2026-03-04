@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -50,7 +52,7 @@ func (s *Server) Routes() http.Handler {
 	// Routes (top-level delete)
 	mux.HandleFunc("/routes/", s.handleRouteDelete)
 
-	return withLogging(mux)
+	return withLogging(withAPIKeyAuth(s.cfg, mux))
 }
 
 // ──────────────────────────── Health ────────────────────────────
@@ -419,6 +421,71 @@ func withLogging(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		slog.Info("http request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start).String())
 	})
+}
+
+func withAPIKeyAuth(cfg config.Config, next http.Handler) http.Handler {
+	verifyClient := &http.Client{Timeout: 5 * time.Second}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawKey, err := extractAPIKey(r)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, err)
+			return
+		}
+
+		valid, err := verifyAPIKey(verifyClient, cfg.BetterAuthVerifyURL, rawKey)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !valid {
+			writeError(w, http.StatusUnauthorized, errors.New("invalid api key"))
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func verifyAPIKey(client *http.Client, endpoint string, key string) (bool, error) {
+	body, _ := json.Marshal(map[string]string{"key": key})
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Errorf("build verify request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("verify api key: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, nil
+	}
+
+	var payload struct {
+		Valid bool `json:"valid"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return false, fmt.Errorf("decode verify response: %w", err)
+	}
+	return payload.Valid, nil
+}
+
+func extractAPIKey(r *http.Request) (string, error) {
+	if bearer := strings.TrimSpace(r.Header.Get("Authorization")); bearer != "" {
+		const prefix = "Bearer "
+		if !strings.HasPrefix(bearer, prefix) || strings.TrimSpace(strings.TrimPrefix(bearer, prefix)) == "" {
+			return "", errors.New("invalid authorization header")
+		}
+		return strings.TrimSpace(strings.TrimPrefix(bearer, prefix)), nil
+	}
+
+	if key := strings.TrimSpace(r.Header.Get("X-API-Key")); key != "" {
+		return key, nil
+	}
+	return "", errors.New("missing api key")
 }
 
 func decodeJSON(r *http.Request, out any) error {

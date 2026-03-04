@@ -69,7 +69,5 @@ func (d *DB) migrate() error {
 	if _, err := d.db.Exec(schemaV1); err != nil {
 		return err
 	}
-	// Backward-compatible migration for older databases created before ssh_port existed.
-	_, err := d.db.Exec(`ALTER TABLE vms ADD COLUMN IF NOT EXISTS ssh_port INTEGER NOT NULL DEFAULT 0`)
-	return err
+	return nil
 }
