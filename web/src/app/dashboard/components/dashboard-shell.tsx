@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Card } from "@/components/ui/card";
 import { authClient } from "@/lib/auth-client";
@@ -154,6 +154,7 @@ export function DashboardShell({ userLabel }: DashboardShellProps) {
   const [loadingKeys, setLoadingKeys] = useState(true);
   const [error, setError] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
+  const initialLoadDone = useRef(false);
 
   const loadKeys = useCallback(async () => {
     setLoadingKeys(true);
@@ -168,7 +169,9 @@ export function DashboardShell({ userLabel }: DashboardShellProps) {
   }, []);
 
   const loadVMs = useCallback(async () => {
-    setLoadingVMs(true);
+    if (!initialLoadDone.current) {
+      setLoadingVMs(true);
+    }
     setError("");
     try {
       const vmsResponse = await fetch("/api/v1/vms", {
@@ -227,9 +230,11 @@ export function DashboardShell({ userLabel }: DashboardShellProps) {
       );
       setVMs(enriched);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load dashboard");
-      setVMs([]);
+      if (!initialLoadDone.current) {
+        setError(err instanceof Error ? err.message : "Unable to load dashboard");
+      }
     } finally {
+      initialLoadDone.current = true;
       setLoadingVMs(false);
     }
   }, []);
@@ -238,6 +243,11 @@ export function DashboardShell({ userLabel }: DashboardShellProps) {
     void loadKeys();
     void loadVMs();
   }, [loadKeys, loadVMs]);
+
+  useEffect(() => {
+    const interval = setInterval(() => void loadVMs(), 10_000);
+    return () => clearInterval(interval);
+  }, [loadVMs]);
 
   const stats: DashboardStats = useMemo(() => {
     const active = vms.filter((vm) => vm.state === "running").length;

@@ -15,7 +15,7 @@ export const auth = betterAuth({
   ],
   rateLimit: {
     window: 60,
-    max: 100,
+    max: 1000,
   },
   socialProviders: {
     google: {

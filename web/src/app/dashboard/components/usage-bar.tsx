@@ -6,21 +6,27 @@ type UsageBarProps = {
 
 export function UsageBar({ value }: UsageBarProps) {
   const bounded = Math.max(0, Math.min(100, Math.round(value)));
-  const filled = Math.round(bounded / 5);
   const dimmed = bounded === 0;
-  const barColor = dimmed
-    ? "text-zinc-700"
+
+  const barFill = dimmed
+    ? "bg-zinc-800"
     : bounded >= 90
-      ? "text-zinc-300"
+      ? "bg-zinc-300"
       : bounded >= 70
-        ? "text-zinc-400"
-        : "text-zinc-500";
+        ? "bg-zinc-400"
+        : "bg-zinc-500";
 
   return (
-    <span className="font-mono tracking-[0.05em]">
-      <span className={barColor}>{"█".repeat(filled)}</span>
-      <span className="text-zinc-800">{"░".repeat(20 - filled)}</span>
-      <span className={`ml-2 ${dimmed ? "text-zinc-600" : "text-zinc-400"}`}>{bounded}%</span>
+    <span className="flex items-center gap-2 font-mono">
+      <span className="relative h-2 w-full max-w-[120px] overflow-hidden rounded-[1px] bg-zinc-800/60">
+        <span
+          className={`absolute inset-y-0 left-0 ${barFill} transition-[width] duration-300`}
+          style={{ width: `${bounded}%` }}
+        />
+      </span>
+      <span className={`min-w-[3ch] text-right text-[11px] tabular-nums ${dimmed ? "text-zinc-600" : "text-zinc-400"}`}>
+        {bounded}%
+      </span>
     </span>
   );
 }

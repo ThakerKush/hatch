@@ -45,7 +45,7 @@ export function VMTable({ vms }: VMTableProps) {
       </div>
 
       {vms.length === 0 ? (
-        <div className="px-5 py-7 font-mono text-sm text-zinc-500">No VMs found for this key.</div>
+        <div className="px-5 py-7 font-mono text-sm text-zinc-500">No VMs found.</div>
       ) : (
         vms.map((vm) => {
           const status = stateLabel(vm.state);
