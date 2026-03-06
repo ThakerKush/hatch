@@ -13,6 +13,17 @@ export const auth = betterAuth({
     "https://hatchvm.com",
     "https://console.hatchvm.com",
   ],
+  advanced: {
+    // Share the session cookie across all subdomains
+    crossSubDomainCookies: {
+      enabled: true,
+      domain: ".hatchvm.com",
+    },
+  },
+  rateLimit: {
+    window: 60,
+    max: 100,
+  },
   socialProviders: {
     google: {
       clientId: config.auth.googleClientId as string,

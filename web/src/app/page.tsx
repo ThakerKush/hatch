@@ -10,7 +10,13 @@ export default async function Home() {
     headers: await headers(),
   });
   if (session) {
-    redirect("/dashboard");
+    // Redirect to the console subdomain — redirecting to "/dashboard" here would
+    // be caught by the middleware on hatchvm.com and sent back to "/", looping.
+    const consoleUrl =
+      process.env.NODE_ENV === "production"
+        ? "https://console.hatchvm.com/dashboard"
+        : "/dashboard";
+    redirect(consoleUrl);
   }
 
   return <LandingPage />;
