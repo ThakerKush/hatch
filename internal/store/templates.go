@@ -60,7 +60,7 @@ func (d *DB) ListTemplates() ([]Template, error) {
 	}
 	defer rows.Close()
 
-	var templates []Template
+	templates := make([]Template, 0)
 	for rows.Next() {
 		var t Template
 		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.ImageID, &t.UserData,

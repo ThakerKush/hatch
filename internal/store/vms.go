@@ -85,7 +85,7 @@ func (d *DB) ListVMs() ([]VM, error) {
 	}
 	defer rows.Close()
 
-	var vms []VM
+	vms := make([]VM, 0)
 	for rows.Next() {
 		vm, err := scanVMRows(rows)
 		if err != nil {
@@ -106,7 +106,7 @@ func (d *DB) ListVMsByUser(userID string) ([]VM, error) {
 	}
 	defer rows.Close()
 
-	var vms []VM
+	vms := make([]VM, 0)
 	for rows.Next() {
 		vm, err := scanVMRows(rows)
 		if err != nil {
@@ -169,7 +169,7 @@ func (d *DB) ListVMsByState(state string) ([]VM, error) {
 	}
 	defer rows.Close()
 
-	var vms []VM
+	vms := make([]VM, 0)
 	for rows.Next() {
 		vm, err := scanVMRows(rows)
 		if err != nil {

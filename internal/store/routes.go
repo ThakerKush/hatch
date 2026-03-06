@@ -59,7 +59,7 @@ func (d *DB) ListRoutesByVM(vmID string) ([]ProxyRoute, error) {
 	}
 	defer rows.Close()
 
-	var routes []ProxyRoute
+	routes := make([]ProxyRoute, 0)
 	for rows.Next() {
 		var r ProxyRoute
 		if err := rows.Scan(&r.ID, &r.VMID, &r.Subdomain, &r.TargetPort, &r.AutoWake,
@@ -101,7 +101,7 @@ func (d *DB) ListAllRoutes() ([]ProxyRoute, error) {
 	}
 	defer rows.Close()
 
-	var routes []ProxyRoute
+	routes := make([]ProxyRoute, 0)
 	for rows.Next() {
 		var r ProxyRoute
 		if err := rows.Scan(&r.ID, &r.VMID, &r.Subdomain, &r.TargetPort, &r.AutoWake,

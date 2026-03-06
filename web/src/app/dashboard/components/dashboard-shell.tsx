@@ -194,7 +194,7 @@ export function DashboardShell({ userLabel }: DashboardShellProps) {
         throw new Error(payload.error || "Unable to load VMs");
       }
 
-      const vmRecords = (await vmsResponse.json()) as VMRecord[];
+      const vmRecords = ((await vmsResponse.json()) as VMRecord[] | null) ?? [];
       const enriched = await Promise.all(
         vmRecords.map(async (vm) => {
           const [metricsRes, snapshotsRes] = await Promise.all([
@@ -208,8 +208,10 @@ export function DashboardShell({ userLabel }: DashboardShellProps) {
             }),
           ]);
 
-          const metrics = metricsRes.ok ? ((await metricsRes.json()) as VMMetrics) : null;
-          const snapshots = snapshotsRes.ok ? ((await snapshotsRes.json()) as SnapshotRecord[]) : [];
+          const metrics = metricsRes.ok ? ((await metricsRes.json()) as VMMetrics | null) : null;
+          const snapshots = snapshotsRes.ok
+            ? (((await snapshotsRes.json()) as SnapshotRecord[] | null) ?? [])
+            : [];
 
           const memPercent = Math.max(5, Math.min(100, Math.round((vm.mem_mib / 4096) * 100)));
           const cpuPercent = Math.round(metrics?.vcpu?.utilization_percent ?? 0);

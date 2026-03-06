@@ -60,7 +60,7 @@ func (d *DB) ListSnapshots(vmID string) ([]Snapshot, error) {
 	}
 	defer rows.Close()
 
-	var snapshots []Snapshot
+	snapshots := make([]Snapshot, 0)
 	for rows.Next() {
 		var s Snapshot
 		if err := rows.Scan(&s.ID, &s.VMID, &s.StateKey, &s.MemoryKey, &s.DiskKey,

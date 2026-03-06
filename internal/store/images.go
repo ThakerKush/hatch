@@ -54,7 +54,7 @@ func (d *DB) ListImages() ([]Image, error) {
 	}
 	defer rows.Close()
 
-	var images []Image
+	images := make([]Image, 0)
 	for rows.Next() {
 		var img Image
 		if err := rows.Scan(&img.ID, &img.KernelPath, &img.RootfsPath, &img.BootArgs, &img.CreatedAt); err != nil {
