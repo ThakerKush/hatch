@@ -21,13 +21,9 @@ function AuthButton({ label, variant }: { label: string; variant: "outline" | "s
       className={styles}
       onClick={async () => {
         setLoading(true);
-        const consoleUrl =
-          typeof window !== "undefined" && window.location.hostname !== "localhost"
-            ? "https://console.hatchvm.com"
-            : "";
         await authClient.signIn.social({
           provider: "google",
-          callbackURL: `${consoleUrl}/dashboard`,
+          callbackURL: "/dashboard",
         });
         setLoading(false);
       }}

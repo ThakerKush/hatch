@@ -9,11 +9,7 @@ export default async function DashboardPage() {
     headers: await headers(),
   });
   if (!session) {
-    // Redirect to the landing domain, not "/" — on console.hatchvm.com "/" gets
-    // rewritten back to /dashboard by middleware, causing an infinite loop.
-    const landingUrl =
-      process.env.BETTER_AUTH_URL?.replace("console.", "") ?? "/";
-    redirect(landingUrl);
+    redirect("/");
   }
 
   return <DashboardShell userLabel={session.user.email || "user"} />;
