@@ -1,5 +1,9 @@
 "use client";
 
+import { useState } from "react";
+
+import { authClient } from "@/lib/auth-client";
+
 import type { NavTab } from "./types";
 
 type DashboardNavbarProps = {
@@ -8,9 +12,17 @@ type DashboardNavbarProps = {
   userLabel: string;
 };
 
-const tabs: NavTab[] = ["dashboard", "keys", "docs"];
+const tabs: NavTab[] = ["dashboard"];
 
 export function DashboardNavbar({ activeTab, onTabChange, userLabel }: DashboardNavbarProps) {
+  const [signingOut, setSigningOut] = useState(false);
+
+  const signOut = async () => {
+    setSigningOut(true);
+    await authClient.signOut({ fetchOptions: { onSuccess: () => { window.location.href = "/"; } } });
+    setSigningOut(false);
+  };
+
   return (
     <header className="sticky top-0 z-20 border-b border-zinc-800 bg-black/90 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-8 py-4 font-mono">
@@ -38,8 +50,18 @@ export function DashboardNavbar({ activeTab, onTabChange, userLabel }: Dashboard
           ))}
         </nav>
 
-        <div className="text-[11px] tracking-[0.12em] text-zinc-500">
-          <span className="text-zinc-400">●</span> {userLabel} · api v1
+        <div className="flex items-center gap-4 text-[11px] tracking-[0.12em] text-zinc-500">
+          <span>
+            <span className="text-zinc-400">●</span> {userLabel} · api v1
+          </span>
+          <button
+            type="button"
+            disabled={signingOut}
+            onClick={() => void signOut()}
+            className="border border-zinc-800 px-3 py-1 text-[10px] uppercase tracking-[0.16em] text-zinc-600 transition-colors hover:border-zinc-600 hover:text-zinc-300 disabled:opacity-40"
+          >
+            {signingOut ? "..." : "sign out"}
+          </button>
         </div>
       </div>
     </header>

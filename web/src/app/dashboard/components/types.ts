@@ -1,4 +1,4 @@
-export type NavTab = "dashboard" | "keys" | "docs";
+export type NavTab = "dashboard";
 
 export type VMState =
   | "starting"

@@ -307,14 +307,7 @@ export function DashboardShell({ userLabel }: DashboardShellProps) {
         </section>
 
         <section className="mb-4 grid grid-cols-1 gap-2 lg:grid-cols-2">
-          <Card className="rounded-none border-zinc-800 bg-zinc-950">
-            <div className="border-b border-zinc-800 px-5 py-3 text-[10px] tracking-[0.24em] text-zinc-500">
-              RECENT API REQUESTS
-            </div>
-            <div className="px-5 py-6 text-sm text-zinc-500">
-              Request logs will appear here after backend request telemetry is added.
-            </div>
-          </Card>
+          <CodeSnippets />
 
           <ApiKeyList
             keys={keys}
@@ -323,8 +316,6 @@ export function DashboardShell({ userLabel }: DashboardShellProps) {
             onRevoke={(keyId) => void onRevoke(keyId)}
           />
         </section>
-
-        <CodeSnippets />
       </main>
 
       <CreateKeyModal open={modalOpen} onOpenChange={setModalOpen} onCreateKey={onCreateKey} />
