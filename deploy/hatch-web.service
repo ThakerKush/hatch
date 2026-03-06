@@ -9,7 +9,7 @@ User=root
 WorkingDirectory=/root/hatch/web
 EnvironmentFile=/root/hatch/.env
 # Use the shell so PATH is resolved — works with fnm/nvm/system node
-ExecStart=/usr/local/bin/pnpm start
+ExecStart=/usr/bin/pnpm start
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
