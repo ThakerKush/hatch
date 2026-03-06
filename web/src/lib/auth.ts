@@ -29,6 +29,9 @@ export const auth = betterAuth({
       defaultPrefix: "hatch_",
       enableMetadata: false,
       requireName: false,
+      rateLimit: {
+        enabled: false,
+      },
     }),
     nextCookies(),
   ],

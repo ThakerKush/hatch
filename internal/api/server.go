@@ -57,7 +57,7 @@ func (s *Server) Routes() http.Handler {
 	// Routes (top-level delete)
 	mux.HandleFunc("/routes/", s.handleRouteDelete)
 
-	return withLogging(withAPIKeyAuth(s.cfg, mux))
+	return withLogging(withAuth(s.cfg, mux))
 }
 
 // ──────────────────────────── Health ────────────────────────────
@@ -552,28 +552,81 @@ func withLogging(next http.Handler) http.Handler {
 	})
 }
 
-func withAPIKeyAuth(cfg config.Config, next http.Handler) http.Handler {
-	verifyClient := &http.Client{Timeout: 5 * time.Second}
+func withAuth(cfg config.Config, next http.Handler) http.Handler {
+	authClient := &http.Client{Timeout: 5 * time.Second}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rawKey, err := extractAPIKey(r)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, err)
-			return
-		}
-
-		verifyResult, err := verifyAPIKey(verifyClient, cfg.BetterAuthVerifyURL, rawKey)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if !verifyResult.Valid || strings.TrimSpace(verifyResult.UserID) == "" {
+		// Path 1: API key (Authorization: Bearer / X-API-Key)
+		if rawKey, err := extractAPIKey(r); err == nil {
+			result, err := verifyAPIKey(authClient, cfg.BetterAuthVerifyURL, rawKey)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if result.Valid && strings.TrimSpace(result.UserID) != "" {
+				ctx := context.WithValue(r.Context(), userIDContextKey, result.UserID)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
 			writeError(w, http.StatusUnauthorized, errors.New("invalid api key"))
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), userIDContextKey, verifyResult.UserID)
+		// Path 2: session cookie (forwarded to Better Auth get-session)
+		userID, err := verifySession(authClient, cfg.BetterAuthSessionURL, r)
+		if err != nil {
+			slog.Warn("session verification failed", "error", err)
+			writeError(w, http.StatusUnauthorized, errors.New("unauthorized"))
+			return
+		}
+		if strings.TrimSpace(userID) == "" {
+			writeError(w, http.StatusUnauthorized, errors.New("unauthorized"))
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), userIDContextKey, userID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func verifySession(client *http.Client, endpoint string, original *http.Request) (string, error) {
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("build session request: %w", err)
+	}
+
+	for _, cookie := range original.Cookies() {
+		req.AddCookie(cookie)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("verify session: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", nil
+	}
+
+	var payload struct {
+		Session *struct {
+			UserID string `json:"userId"`
+		} `json:"session"`
+		User *struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", fmt.Errorf("decode session response: %w", err)
+	}
+
+	if payload.User != nil && strings.TrimSpace(payload.User.ID) != "" {
+		return strings.TrimSpace(payload.User.ID), nil
+	}
+	if payload.Session != nil && strings.TrimSpace(payload.Session.UserID) != "" {
+		return strings.TrimSpace(payload.Session.UserID), nil
+	}
+	return "", nil
 }
 
 type apiKeyVerifyResult struct {

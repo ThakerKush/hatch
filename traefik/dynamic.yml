@@ -1,7 +1,8 @@
 # Traefik dynamic config
-# api.hatchvm.com  -> Hatch REST API (:8080)
-# hatchvm.com      -> Next.js app    (:3000)
-# *.hatchvm.com    -> Hatch VM proxy (:9090)  [agent subdomain catch-all]
+# api.hatchvm.com              -> Hatch REST API (:8080)
+# hatchvm.com/api/v1/*         -> Hatch REST API (:8080) (dashboard, cookies)
+# hatchvm.com                  -> Next.js app    (:3000)
+# *.hatchvm.com                -> Hatch VM proxy (:9090) [agent subdomain catch-all]
 
 http:
   routers:
@@ -15,6 +16,19 @@ http:
         certResolver: letsencrypt
         domains:
           - main: "*.hatchvm.com"
+
+    hatch-dashboard-api:
+      rule: "Host(`hatchvm.com`) && PathPrefix(`/api/v1`)"
+      entryPoints:
+        - websecure
+      service: hatch-api
+      priority: 80
+      middlewares:
+        - strip-api-v1
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "hatchvm.com"
 
     hatch-web:
       rule: "Host(`hatchvm.com`) || Host(`www.hatchvm.com`)"
@@ -39,6 +53,12 @@ http:
         certResolver: letsencrypt
         domains:
           - main: "*.hatchvm.com"
+
+  middlewares:
+    strip-api-v1:
+      stripPrefix:
+        prefixes:
+          - "/api/v1"
 
   services:
     hatch-api:

@@ -11,8 +11,9 @@ type Config struct {
 	// HTTP API
 	HTTPAddr string
 	DataDir  string
-	// Better Auth API key verify endpoint for Go middleware.
-	BetterAuthVerifyURL string
+	// Better Auth endpoints for Go middleware.
+	BetterAuthVerifyURL  string
+	BetterAuthSessionURL string
 
 	// Database
 	DatabaseURL string
@@ -62,6 +63,10 @@ func LoadFromEnv() Config {
 		BetterAuthVerifyURL: envOrDefault(
 			"HATCH_BETTER_AUTH_VERIFY_URL",
 			"http://127.0.0.1:3000/api/auth/api-key/verify",
+		),
+		BetterAuthSessionURL: envOrDefault(
+			"HATCH_BETTER_AUTH_SESSION_URL",
+			"http://127.0.0.1:3000/api/auth/get-session",
 		),
 		DatabaseURL:       envOrDefault("DATABASE_URL", "postgres://hatch:hatch@localhost:5432/hatch?sslmode=disable"),
 		MaxVMsPerUser:     envOrDefaultInt("HATCH_MAX_VMS_PER_USER", 5),

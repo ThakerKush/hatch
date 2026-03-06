@@ -30,8 +30,6 @@ type NormalizedCreateKeyResult = {
   plainTextKey: string;
 };
 
-const STORAGE_KEY = "hatch.dashboard.apiKey";
-
 function formatUptime(seconds: number): string {
   if (seconds <= 0) {
     return "—";
@@ -170,48 +168,45 @@ export function DashboardShell({ userLabel }: DashboardShellProps) {
   }, []);
 
   const loadVMs = useCallback(async () => {
-    const storedKey = window.localStorage.getItem(STORAGE_KEY) || "";
-    if (!storedKey) {
-      setVMs([]);
-      setLoadingVMs(false);
-      return;
-    }
-
     setLoadingVMs(true);
     setError("");
     try {
-      const vmsResponse = await fetch("/api/vms", {
-        headers: { "x-hatch-api-key": storedKey },
+      const vmsResponse = await fetch("/api/v1/vms", {
+        credentials: "include",
         cache: "no-store",
       });
       if (!vmsResponse.ok) {
-        if (vmsResponse.status === 401) {
-          window.localStorage.removeItem(STORAGE_KEY);
-          setVMs([]);
-          return;
-        }
         const payload = (await vmsResponse.json().catch(() => ({}))) as { error?: string };
         throw new Error(payload.error || "Unable to load VMs");
       }
 
       const vmRecords = ((await vmsResponse.json()) as VMRecord[] | null) ?? [];
       const enriched = await Promise.all(
-        vmRecords.map(async (vm) => {
-          const [metricsRes, snapshotsRes] = await Promise.all([
-            fetch(`/api/vms/${vm.id}/metrics`, {
-              headers: { "x-hatch-api-key": storedKey },
-              cache: "no-store",
-            }),
-            fetch(`/api/vms/${vm.id}/snapshots`, {
-              headers: { "x-hatch-api-key": storedKey },
-              cache: "no-store",
-            }),
-          ]);
+        vmRecords.map(async (vm): Promise<DashboardVM> => {
+          let metrics: VMMetrics | null = null;
+          let snapshots: SnapshotRecord[] = [];
 
-          const metrics = metricsRes.ok ? ((await metricsRes.json()) as VMMetrics | null) : null;
-          const snapshots = snapshotsRes.ok
-            ? (((await snapshotsRes.json()) as SnapshotRecord[] | null) ?? [])
-            : [];
+          try {
+            const [metricsRes, snapshotsRes] = await Promise.all([
+              fetch(`/api/v1/vms/${vm.id}/metrics`, {
+                credentials: "include",
+                cache: "no-store",
+              }),
+              fetch(`/api/v1/vms/${vm.id}/snapshots`, {
+                credentials: "include",
+                cache: "no-store",
+              }),
+            ]);
+
+            if (metricsRes.ok) {
+              metrics = ((await metricsRes.json()) as VMMetrics | null) ?? null;
+            }
+            if (snapshotsRes.ok) {
+              snapshots = ((await snapshotsRes.json()) as SnapshotRecord[] | null) ?? [];
+            }
+          } catch {
+            // enrichment failed for this VM — continue with defaults
+          }
 
           const memPercent = Math.max(5, Math.min(100, Math.round((vm.mem_mib / 4096) * 100)));
           const cpuPercent = Math.round(metrics?.vcpu?.utilization_percent ?? 0);
@@ -227,7 +222,7 @@ export function DashboardShell({ userLabel }: DashboardShellProps) {
             network: `↑ ${tx} ↓ ${rx}`,
             uptimeLabel: formatUptime(metrics?.uptime_seconds ?? 0),
             snapshots: snapshots.length,
-          } satisfies DashboardVM;
+          };
         }),
       );
       setVMs(enriched);
@@ -257,12 +252,10 @@ export function DashboardShell({ userLabel }: DashboardShellProps) {
   const onCreateKey = useCallback(
     async (name: string) => {
       const created = await createDashboardApiKey(name);
-      window.localStorage.setItem(STORAGE_KEY, created.plainTextKey);
       await loadKeys();
-      await loadVMs();
       return { plainTextKey: created.plainTextKey };
     },
-    [loadKeys, loadVMs],
+    [loadKeys],
   );
 
   const onRevoke = useCallback(
