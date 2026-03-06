@@ -103,10 +103,10 @@ export function CreateKeyModal({ open, onOpenChange, onCreateKey }: CreateKeyMod
             </DialogFooter>
           </div>
         ) : (
-          <div className="min-w-0 space-y-4">
+          <div className="space-y-4">
             <p className="text-sm text-zinc-400">Copy this key now. It will never be shown again.</p>
-            <div className="rounded-md border border-zinc-800 bg-zinc-950 p-3">
-              <code className="block break-all text-xs leading-5 text-zinc-200">{createdKey}</code>
+            <div className="overflow-hidden rounded-md border border-zinc-800 bg-zinc-950 p-3">
+              <code className="block w-full break-all text-xs leading-5 text-zinc-200">{createdKey}</code>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => void copyKey()}>
