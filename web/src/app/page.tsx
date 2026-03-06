@@ -1,7 +1,8 @@
 import { headers } from "next/headers";
+import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { GoogleSignInButton } from "@/components/auth/google-sign-in-button";
-import { SignOutButton } from "@/components/auth/sign-out-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { auth } from "@/lib/auth";
 
@@ -9,6 +10,9 @@ export default async function Home() {
   const session = await auth.api.getSession({
     headers: await headers(),
   });
+  if (session) {
+    redirect("/dashboard");
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
@@ -16,13 +20,16 @@ export default async function Home() {
         <CardHeader>
           <CardTitle>Hatch</CardTitle>
           <CardDescription>
-            {session
-              ? `Signed in as ${session.user.email}`
-              : "Sign in with Google to get started."}
+            Sign in with Google to get started.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {session ? <SignOutButton /> : <GoogleSignInButton />}
+          <div className="space-y-3">
+            <GoogleSignInButton />
+            <Link href="/dashboard" className="block text-center text-xs text-zinc-400 hover:text-zinc-200">
+              view dashboard
+            </Link>
+          </div>
         </CardContent>
       </Card>
     </div>

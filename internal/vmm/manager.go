@@ -19,6 +19,7 @@ import (
 type CreateOptions struct {
 	ImageID        string
 	TemplateID     string
+	UserID         string
 	VCPUCount      int
 	MemMib         int
 	BootArgs       string
@@ -161,6 +162,7 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 		ID:            vmID,
 		ImageID:       image.ID,
 		TemplateID:    opts.TemplateID,
+		UserID:        opts.UserID,
 		State:         store.VMStateStarting,
 		VCPUCount:     clampInt(opts.VCPUCount, 1, 32, m.cfg.DefaultVCPU),
 		MemMib:        clampInt(opts.MemMib, 128, 65536, m.cfg.DefaultMemMib),
@@ -267,16 +269,16 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 	}
 
 	machine, err := newMachine(ctx, m.cfg.FirecrackerBinary, machineConfig{
-		socketPath:    socketPath,
-		kernelPath:    image.KernelPath,
-		kernelArgs:    bootArgs,
-		rootfsPath:    vmRootfs,
-		vmID:          vmID,
-		vcpuCount:     int64(vm.VCPUCount),
-		memMib:        int64(vm.MemMib),
-		tapName:       tapName,
-		macAddr:       macAddr,
-		logDir:        vmDir,
+		socketPath: socketPath,
+		kernelPath: image.KernelPath,
+		kernelArgs: bootArgs,
+		rootfsPath: vmRootfs,
+		vmID:       vmID,
+		vcpuCount:  int64(vm.VCPUCount),
+		memMib:     int64(vm.MemMib),
+		tapName:    tapName,
+		macAddr:    macAddr,
+		logDir:     vmDir,
 	})
 	if err != nil {
 		m.markError(vmID, err)

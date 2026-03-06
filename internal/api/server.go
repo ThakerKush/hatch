@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,10 @@ type Server struct {
 	db  *store.DB
 	vmm *vmm.Manager
 }
+
+type contextKey string
+
+const userIDContextKey contextKey = "hatch_user_id"
 
 // NewServer creates an API server backed by the given database and VM manager.
 func NewServer(cfg config.Config, db *store.DB, manager *vmm.Manager) *Server {
@@ -137,6 +142,12 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 // ──────────────────────────── VMs ────────────────────────────
 
 func (s *Server) handleVMs(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userIDFromCtx(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, errors.New("missing user in auth context"))
+		return
+	}
+
 	switch r.Method {
 	case http.MethodPost:
 		var req createVMRequest
@@ -181,7 +192,22 @@ func (s *Server) handleVMs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		count, err := s.db.CountVMsByUser(userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if count >= s.cfg.MaxVMsPerUser {
+			writeError(
+				w,
+				http.StatusForbidden,
+				fmt.Errorf("vm limit reached (%d/%d)", count, s.cfg.MaxVMsPerUser),
+			)
+			return
+		}
+
 		opts := req.ToOptions(s.cfg)
+		opts.UserID = userID
 		vm, err := s.vmm.CreateAndStart(r.Context(), opts)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -189,7 +215,16 @@ func (s *Server) handleVMs(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusCreated, vm)
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.vmm.List())
+		vms, err := s.db.ListVMsByUser(userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		ptrs := make([]*store.VM, len(vms))
+		for i := range vms {
+			ptrs[i] = &vms[i]
+		}
+		writeJSON(w, http.StatusOK, ptrs)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, errMethodNotAllowed)
 	}
@@ -209,13 +244,26 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 1 {
 		switch r.Method {
 		case http.MethodGet:
-			vm, ok := s.vmm.Get(id)
-			if !ok {
+			vm, err := s.getOwnedVM(r.Context(), id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if vm == nil {
 				writeError(w, http.StatusNotFound, errNotFound)
 				return
 			}
 			writeJSON(w, http.StatusOK, vm)
 		case http.MethodDelete:
+			vm, err := s.getOwnedVM(r.Context(), id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if vm == nil {
+				writeError(w, http.StatusNotFound, errNotFound)
+				return
+			}
 			if err := s.vmm.Delete(r.Context(), id); err != nil {
 				writeError(w, http.StatusNotFound, err)
 				return
@@ -231,7 +279,16 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 	switch {
 	// POST /vms/{id}/stop
 	case r.Method == http.MethodPost && action == "stop":
-		vm, err := s.vmm.Stop(r.Context(), id)
+		vm, err := s.getOwnedVM(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if vm == nil {
+			writeError(w, http.StatusNotFound, errNotFound)
+			return
+		}
+		vm, err = s.vmm.Stop(r.Context(), id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -240,6 +297,28 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 
 	// POST /vms/{id}/snapshot
 	case r.Method == http.MethodPost && action == "snapshot":
+		vm, err := s.getOwnedVM(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if vm == nil {
+			writeError(w, http.StatusNotFound, errNotFound)
+			return
+		}
+		snaps, err := s.db.ListSnapshots(vm.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if len(snaps) >= s.cfg.MaxSnapshotsPerVM {
+			writeError(
+				w,
+				http.StatusForbidden,
+				fmt.Errorf("snapshot limit reached (%d/%d)", len(snaps), s.cfg.MaxSnapshotsPerVM),
+			)
+			return
+		}
 		snap, err := s.vmm.Snapshot(r.Context(), id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -249,7 +328,16 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 
 	// POST /vms/{id}/restore
 	case r.Method == http.MethodPost && action == "restore":
-		vm, err := s.vmm.Restore(r.Context(), id)
+		vm, err := s.getOwnedVM(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if vm == nil {
+			writeError(w, http.StatusNotFound, errNotFound)
+			return
+		}
+		vm, err = s.vmm.Restore(r.Context(), id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -258,12 +346,39 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 
 	// GET /vms/{id}/snapshots
 	case r.Method == http.MethodGet && action == "snapshots":
+		vm, err := s.getOwnedVM(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if vm == nil {
+			writeError(w, http.StatusNotFound, errNotFound)
+			return
+		}
 		snaps, err := s.db.ListSnapshots(id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, snaps)
+
+	// GET /vms/{id}/metrics
+	case r.Method == http.MethodGet && action == "metrics":
+		vm, err := s.getOwnedVM(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if vm == nil {
+			writeError(w, http.StatusNotFound, errNotFound)
+			return
+		}
+		metrics, err := readLatestVMMetrics(*vm)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, metrics)
 
 	// POST /vms/{id}/routes
 	case r.Method == http.MethodPost && action == "routes":
@@ -276,7 +391,12 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if _, ok := s.vmm.Get(id); !ok {
+		vm, err := s.getOwnedVM(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if vm == nil {
 			writeError(w, http.StatusNotFound, errNotFound)
 			return
 		}
@@ -293,6 +413,15 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 
 	// GET /vms/{id}/routes
 	case r.Method == http.MethodGet && action == "routes":
+		vm, err := s.getOwnedVM(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if vm == nil {
+			writeError(w, http.StatusNotFound, errNotFound)
+			return
+		}
 		routes, err := s.db.ListRoutesByVM(id)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -432,45 +561,55 @@ func withAPIKeyAuth(cfg config.Config, next http.Handler) http.Handler {
 			return
 		}
 
-		valid, err := verifyAPIKey(verifyClient, cfg.BetterAuthVerifyURL, rawKey)
+		verifyResult, err := verifyAPIKey(verifyClient, cfg.BetterAuthVerifyURL, rawKey)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		if !valid {
+		if !verifyResult.Valid || strings.TrimSpace(verifyResult.UserID) == "" {
 			writeError(w, http.StatusUnauthorized, errors.New("invalid api key"))
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), userIDContextKey, verifyResult.UserID)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-func verifyAPIKey(client *http.Client, endpoint string, key string) (bool, error) {
+type apiKeyVerifyResult struct {
+	Valid  bool
+	UserID string
+}
+
+func verifyAPIKey(client *http.Client, endpoint string, key string) (apiKeyVerifyResult, error) {
 	body, _ := json.Marshal(map[string]string{"key": key})
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return false, fmt.Errorf("build verify request: %w", err)
+		return apiKeyVerifyResult{}, fmt.Errorf("build verify request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("verify api key: %w", err)
+		return apiKeyVerifyResult{}, fmt.Errorf("verify api key: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return false, nil
+		return apiKeyVerifyResult{Valid: false}, nil
 	}
 
 	var payload struct {
-		Valid bool `json:"valid"`
+		Valid  bool   `json:"valid"`
+		UserID string `json:"userId"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return false, fmt.Errorf("decode verify response: %w", err)
+		return apiKeyVerifyResult{}, fmt.Errorf("decode verify response: %w", err)
 	}
-	return payload.Valid, nil
+	return apiKeyVerifyResult{
+		Valid:  payload.Valid,
+		UserID: strings.TrimSpace(payload.UserID),
+	}, nil
 }
 
 func extractAPIKey(r *http.Request) (string, error) {
@@ -502,4 +641,28 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+func userIDFromCtx(ctx context.Context) (string, bool) {
+	userID, ok := ctx.Value(userIDContextKey).(string)
+	if !ok || strings.TrimSpace(userID) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(userID), true
+}
+
+func (s *Server) getOwnedVM(ctx context.Context, vmID string) (*store.VM, error) {
+	userID, ok := userIDFromCtx(ctx)
+	if !ok {
+		return nil, nil
+	}
+
+	vm, err := s.db.GetVM(vmID)
+	if err != nil {
+		return nil, err
+	}
+	if vm == nil || vm.UserID != userID {
+		return nil, nil
+	}
+	return vm, nil
 }

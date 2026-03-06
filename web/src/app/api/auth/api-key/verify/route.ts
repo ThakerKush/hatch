@@ -10,8 +10,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await auth.api.verifyApiKey({ body: { key } });
-    return NextResponse.json({ valid: result.valid });
+    const { valid, key: apiKey } = await auth.api.verifyApiKey({ body: { key } });
+    return NextResponse.json({
+      valid,
+      userId: valid ? apiKey?.referenceId ?? "" : "",
+    });
   } catch {
     return NextResponse.json({ valid: false }, { status: 200 });
   }

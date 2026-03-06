@@ -16,6 +16,9 @@ type Config struct {
 
 	// Database
 	DatabaseURL string
+	// Per-user quotas.
+	MaxVMsPerUser     int
+	MaxSnapshotsPerVM int
 
 	// Firecracker
 	FirecrackerBinary string
@@ -61,6 +64,8 @@ func LoadFromEnv() Config {
 			"http://127.0.0.1:3000/api/auth/api-key/verify",
 		),
 		DatabaseURL:       envOrDefault("DATABASE_URL", "postgres://hatch:hatch@localhost:5432/hatch?sslmode=disable"),
+		MaxVMsPerUser:     envOrDefaultInt("HATCH_MAX_VMS_PER_USER", 5),
+		MaxSnapshotsPerVM: envOrDefaultInt("HATCH_MAX_SNAPSHOTS_PER_VM", 10),
 		FirecrackerBinary: envOrDefault("HATCH_FIRECRACKER_BIN", "firecracker"),
 		BridgeName:        envOrDefault("HATCH_BRIDGE_NAME", "fcbr0"),
 		BridgeCIDR:        envOrDefault("HATCH_BRIDGE_CIDR", "172.16.0.1/24"),

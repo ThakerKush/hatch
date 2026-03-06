@@ -21,6 +21,7 @@ type VM struct {
 	ID            string    `json:"id"`
 	ImageID       string    `json:"image_id"`
 	TemplateID    string    `json:"template_id,omitempty"`
+	UserID        string    `json:"user_id,omitempty"`
 	State         string    `json:"state"`
 	VCPUCount     int       `json:"vcpu_count"`
 	MemMib        int       `json:"mem_mib"`
@@ -39,18 +40,18 @@ type VM struct {
 // vmColumns is the SELECT column list shared by all VM queries.
 const vmColumns = `id, image_id, COALESCE(template_id,''), state, vcpu_count, mem_mib,
   COALESCE(guest_ip,''), COALESCE(guest_mac,''), COALESCE(tap_name,''), COALESCE(ssh_port,0),
-  COALESCE(socket_path,''), COALESCE(work_dir,''), user_data,
+  COALESCE(socket_path,''), COALESCE(work_dir,''), user_data, COALESCE(user_id,''),
   enable_network, created_at, updated_at`
 
 // CreateVM inserts a new VM record.
 func (d *DB) CreateVM(vm VM) error {
 	_, err := d.db.Exec(
 		`INSERT INTO vms (id, image_id, template_id, state, vcpu_count, mem_mib,
-		  guest_ip, guest_mac, tap_name, ssh_port, socket_path, work_dir, user_data,
+		  guest_ip, guest_mac, tap_name, ssh_port, socket_path, work_dir, user_data, user_id,
 		  enable_network, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		vm.ID, vm.ImageID, nullStr(vm.TemplateID), vm.State, vm.VCPUCount, vm.MemMib,
-		vm.GuestIP, vm.GuestMAC, vm.TapName, vm.SSHPort, vm.SocketPath, vm.WorkDir, vm.UserData,
+		vm.GuestIP, vm.GuestMAC, vm.TapName, vm.SSHPort, vm.SocketPath, vm.WorkDir, vm.UserData, vm.UserID,
 		vm.EnableNetwork, vm.CreatedAt, vm.UpdatedAt,
 	)
 	if err != nil {
@@ -93,6 +94,36 @@ func (d *DB) ListVMs() ([]VM, error) {
 		vms = append(vms, *vm)
 	}
 	return vms, rows.Err()
+}
+
+// ListVMsByUser returns VM records owned by a specific user.
+func (d *DB) ListVMsByUser(userID string) ([]VM, error) {
+	rows, err := d.db.Query(
+		`SELECT `+vmColumns+` FROM vms WHERE user_id = $1 ORDER BY created_at DESC`, userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list vms by user: %w", err)
+	}
+	defer rows.Close()
+
+	var vms []VM
+	for rows.Next() {
+		vm, err := scanVMRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		vms = append(vms, *vm)
+	}
+	return vms, rows.Err()
+}
+
+// CountVMsByUser returns the number of VMs owned by a user.
+func (d *DB) CountVMsByUser(userID string) (int, error) {
+	var count int
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM vms WHERE user_id = $1`, userID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count vms by user: %w", err)
+	}
+	return count, nil
 }
 
 // UpdateVMState sets the state and updated_at for a VM.
@@ -175,7 +206,7 @@ func scanVMRow(row *sql.Row) (*VM, error) {
 	err := row.Scan(
 		&vm.ID, &vm.ImageID, &vm.TemplateID, &vm.State, &vm.VCPUCount, &vm.MemMib,
 		&vm.GuestIP, &vm.GuestMAC, &vm.TapName, &vm.SSHPort, &vm.SocketPath, &vm.WorkDir,
-		&vm.UserData, &vm.EnableNetwork, &vm.CreatedAt, &vm.UpdatedAt,
+		&vm.UserData, &vm.UserID, &vm.EnableNetwork, &vm.CreatedAt, &vm.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -191,7 +222,7 @@ func scanVMRows(row rowScanner) (*VM, error) {
 	err := row.Scan(
 		&vm.ID, &vm.ImageID, &vm.TemplateID, &vm.State, &vm.VCPUCount, &vm.MemMib,
 		&vm.GuestIP, &vm.GuestMAC, &vm.TapName, &vm.SSHPort, &vm.SocketPath, &vm.WorkDir,
-		&vm.UserData, &vm.EnableNetwork, &vm.CreatedAt, &vm.UpdatedAt,
+		&vm.UserData, &vm.UserID, &vm.EnableNetwork, &vm.CreatedAt, &vm.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan vm row: %w", err)

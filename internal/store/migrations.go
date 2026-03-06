@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS vms (
     id              TEXT PRIMARY KEY,
     image_id        TEXT NOT NULL REFERENCES images(id),
     template_id     TEXT REFERENCES templates(id),
+    user_id         TEXT NOT NULL DEFAULT '',
     state           TEXT NOT NULL DEFAULT 'starting',
     vcpu_count      INTEGER NOT NULL,
     mem_mib         INTEGER NOT NULL,
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS vms (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_vms_user_id ON vms(user_id);
 
 CREATE TABLE IF NOT EXISTS snapshots (
     id          TEXT PRIMARY KEY,

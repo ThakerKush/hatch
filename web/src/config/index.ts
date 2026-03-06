@@ -1,6 +1,7 @@
 import * as dotenv from "dotenv";
 
 dotenv.config({ path: "../.env" });
+/* eslint-disable @typescript-eslint/no-namespace */
 declare global {
   namespace NodeJS {
     interface ProcessEnv {
@@ -11,11 +12,12 @@ declare global {
       GOOGLE_CLIENT_SECRET: string;
 
       DATABASE_URL: string;
+      HATCH_API_BASE_URL?: string;
     }
   }
 }
 
-export default {
+const config = {
   db: {
     databaseURL: process.env.DATABASE_URL,
   },
@@ -25,4 +27,9 @@ export default {
     googleClientId: process.env.GOOGLE_CLIENT_ID,
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
   },
+  hatch: {
+    apiBaseURL: process.env.HATCH_API_BASE_URL || "http://127.0.0.1:8080",
+  },
 };
+
+export default config;
