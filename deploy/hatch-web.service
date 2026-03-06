@@ -8,7 +8,8 @@ Type=simple
 User=root
 WorkingDirectory=/root/hatch/web
 EnvironmentFile=/root/hatch/.env
-ExecStart=/usr/bin/node node_modules/.bin/next start -p 3000
+# Use the shell so PATH is resolved — works with fnm/nvm/system node
+ExecStart=/usr/local/bin/pnpm start
 Restart=always
 RestartSec=3
 Environment=NODE_ENV=production
