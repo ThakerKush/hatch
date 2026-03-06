@@ -8,7 +8,11 @@ export const auth = betterAuth({
   baseURL: config.auth.baseURL,
   secret: config.auth.secret,
   database: pool,
-  trustedOrigins: [config.auth.baseURL || "http://localhost:3000"],
+  trustedOrigins: [
+    config.auth.baseURL || "http://localhost:3000",
+    "https://hatchvm.com",
+    "https://console.hatchvm.com",
+  ],
   socialProviders: {
     google: {
       clientId: config.auth.googleClientId as string,
