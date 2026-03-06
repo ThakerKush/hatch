@@ -22,6 +22,7 @@ type Config struct {
 	MaxSnapshotsPerVM int
 
 	// Firecracker
+	MaxRootfsSizeMiB  int
 	FirecrackerBinary string
 	BridgeName        string
 	BridgeCIDR        string
@@ -71,6 +72,7 @@ func LoadFromEnv() Config {
 		DatabaseURL:       envOrDefault("DATABASE_URL", "postgres://hatch:hatch@localhost:5432/hatch?sslmode=disable"),
 		MaxVMsPerUser:     envOrDefaultInt("HATCH_MAX_VMS_PER_USER", 5),
 		MaxSnapshotsPerVM: envOrDefaultInt("HATCH_MAX_SNAPSHOTS_PER_VM", 10),
+		MaxRootfsSizeMiB:  envOrDefaultInt("HATCH_MAX_ROOTFS_SIZE_MIB", 8192),
 		FirecrackerBinary: envOrDefault("HATCH_FIRECRACKER_BIN", "firecracker"),
 		BridgeName:        envOrDefault("HATCH_BRIDGE_NAME", "fcbr0"),
 		BridgeCIDR:        envOrDefault("HATCH_BRIDGE_CIDR", "172.16.0.1/24"),

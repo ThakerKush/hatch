@@ -254,6 +254,13 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 		return nil, fmt.Errorf("copy rootfs for vm: %w", err)
 	}
 
+	// Cap rootfs to configured maximum size.
+	if err := capRootfsSize(ctx, vmRootfs, m.cfg.MaxRootfsSizeMiB); err != nil {
+		m.markError(vmID, err)
+		m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
+		return nil, fmt.Errorf("cap rootfs size: %w", err)
+	}
+
 	if err := InjectCloudInitSeed(ctx, vmRootfs, vmDir, vmID, macAddr, opts.UserData); err != nil {
 		m.markError(vmID, err)
 		m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})

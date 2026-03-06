@@ -11,6 +11,7 @@ import (
 
 	"github.com/ThakerKush/Hatch/internal/store"
 	"github.com/ThakerKush/Hatch/internal/util"
+	"golang.org/x/sync/errgroup"
 )
 
 // snapshotVMConfig is the JSON blob persisted alongside each snapshot so
@@ -89,19 +90,17 @@ func (m *Manager) Snapshot(ctx context.Context, vmID string) (*store.Snapshot, e
 		return nil, fmt.Errorf("compute disk delta: %w", err)
 	}
 
-	// 4. Upload artefacts to S3 (compressed where beneficial).
+	// 4. Upload artefacts to S3 in parallel (compressed where beneficial).
 	prefix := fmt.Sprintf("snapshots/%s/%s", vmID, snapID)
 	stateKey := prefix + "/vmstate"
 	memKey := prefix + "/memory.gz"
 	diskKey := prefix + "/disk.delta.gz"
 
-	if err := m.s3.UploadFile(ctx, stateKey, statePath); err != nil {
-		return nil, err
-	}
-	if err := m.s3.UploadFileCompressed(ctx, memKey, memPath); err != nil {
-		return nil, err
-	}
-	if err := m.s3.UploadFileCompressed(ctx, diskKey, deltaPath); err != nil {
+	g, uploadCtx := errgroup.WithContext(ctx)
+	g.Go(func() error { return m.s3.UploadFile(uploadCtx, stateKey, statePath) })
+	g.Go(func() error { return m.s3.UploadFileCompressed(uploadCtx, memKey, memPath) })
+	g.Go(func() error { return m.s3.UploadFileCompressed(uploadCtx, diskKey, deltaPath) })
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
@@ -205,13 +204,11 @@ func (m *Manager) Restore(ctx context.Context, vmID string) (*store.VM, error) {
 	deltaPath := filepath.Join(vmDir, "disk.delta")
 	diskPath := filepath.Join(vmDir, "rootfs.ext4")
 
-	if err := m.s3.DownloadCompressed(ctx, snap.MemoryKey, memPath); err != nil {
-		return nil, err
-	}
-	if err := m.s3.Download(ctx, snap.StateKey, statePath); err != nil {
-		return nil, err
-	}
-	if err := m.s3.DownloadCompressed(ctx, snap.DiskKey, deltaPath); err != nil {
+	g, dlCtx := errgroup.WithContext(ctx)
+	g.Go(func() error { return m.s3.DownloadCompressed(dlCtx, snap.MemoryKey, memPath) })
+	g.Go(func() error { return m.s3.Download(dlCtx, snap.StateKey, statePath) })
+	g.Go(func() error { return m.s3.DownloadCompressed(dlCtx, snap.DiskKey, deltaPath) })
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 

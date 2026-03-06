@@ -1,9 +1,13 @@
 package vmm
 
 import (
+	"bytes"
+	"bufio"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 )
 
@@ -54,44 +58,39 @@ func ComputeDelta(basePath, modifiedPath, deltaPath string) error {
 		return fmt.Errorf("write header: %w", err)
 	}
 
+	const ioBufSize = 4 * 1024 * 1024 // 4 MiB read-ahead buffer
+	baseReader := bufio.NewReaderSize(baseF, ioBufSize)
+	modReader := bufio.NewReaderSize(modF, ioBufSize)
+	outWriter := bufio.NewWriterSize(outF, ioBufSize)
+	defer outWriter.Flush()
+
 	baseBuf := make([]byte, deltaBlockSize)
 	modBuf := make([]byte, deltaBlockSize)
+	entryBuf := make([]byte, 12) // 8 bytes offset + 4 bytes length
 	var offset int64
+	zeroBlock := make([]byte, deltaBlockSize)
 
 	for {
-		bn, bErr := io.ReadFull(baseF, baseBuf)
-		mn, mErr := io.ReadFull(modF, modBuf)
+		bn, bErr := io.ReadFull(baseReader, baseBuf)
+		mn, mErr := io.ReadFull(modReader, modBuf)
 
 		if bn == 0 && mn == 0 {
 			break
 		}
 
-		// Modified image is larger than base — all extra blocks are "changed".
 		if bErr != nil && bn == 0 {
-			bn = 0
-			for i := range baseBuf {
-				baseBuf[i] = 0
-			}
+			copy(baseBuf, zeroBlock)
 		}
 
 		if mn > 0 {
-			changed := bn != mn
-			if !changed {
-				for i := 0; i < mn; i++ {
-					if baseBuf[i] != modBuf[i] {
-						changed = true
-						break
-					}
-				}
-			}
+			changed := bn != mn || !bytes.Equal(baseBuf[:mn], modBuf[:mn])
 			if changed {
-				if err := binary.Write(outF, binary.LittleEndian, offset); err != nil {
-					return fmt.Errorf("write offset: %w", err)
+				binary.LittleEndian.PutUint64(entryBuf[0:8], uint64(offset))
+				binary.LittleEndian.PutUint32(entryBuf[8:12], uint32(mn))
+				if _, err := outWriter.Write(entryBuf); err != nil {
+					return fmt.Errorf("write entry header: %w", err)
 				}
-				if err := binary.Write(outF, binary.LittleEndian, int32(mn)); err != nil {
-					return fmt.Errorf("write length: %w", err)
-				}
-				if _, err := outF.Write(modBuf[:mn]); err != nil {
+				if _, err := outWriter.Write(modBuf[:mn]); err != nil {
 					return fmt.Errorf("write block data: %w", err)
 				}
 			}
@@ -104,14 +103,17 @@ func ComputeDelta(basePath, modifiedPath, deltaPath string) error {
 		}
 	}
 
-	return nil
+	return outWriter.Flush()
 }
 
-// ApplyDelta copies basePath to outputPath, then overwrites blocks using
-// the delta file produced by ComputeDelta.
+// ApplyDelta copies basePath to outputPath using sparse copy, then overwrites
+// blocks using the delta file produced by ComputeDelta.
 func ApplyDelta(basePath, deltaPath, outputPath string) error {
-	if err := copyFile(basePath, outputPath); err != nil {
-		return fmt.Errorf("copy base: %w", err)
+	if err := run(context.Background(), "cp", "--sparse=always", "--reflink=auto", basePath, outputPath); err != nil {
+		// Fall back to plain copy if cp flags aren't supported.
+		if err := copyFile(basePath, outputPath); err != nil {
+			return fmt.Errorf("copy base: %w", err)
+		}
 	}
 
 	deltaF, err := os.Open(deltaPath)
@@ -120,8 +122,10 @@ func ApplyDelta(basePath, deltaPath, outputPath string) error {
 	}
 	defer deltaF.Close()
 
+	deltaReader := bufio.NewReaderSize(deltaF, 4*1024*1024)
+
 	var hdr deltaHeader
-	if err := binary.Read(deltaF, binary.LittleEndian, &hdr); err != nil {
+	if err := binary.Read(deltaReader, binary.LittleEndian, &hdr); err != nil {
 		return fmt.Errorf("read header: %w", err)
 	}
 	if hdr.Magic != deltaMagic {
@@ -134,35 +138,36 @@ func ApplyDelta(basePath, deltaPath, outputPath string) error {
 	}
 	defer outF.Close()
 
-	// If modified image was larger than base, extend the output.
 	outStat, _ := outF.Stat()
+	entryBuf := make([]byte, 12)
+	data := make([]byte, deltaBlockSize)
+
 	for {
-		var offset int64
-		if err := binary.Read(deltaF, binary.LittleEndian, &offset); err != nil {
-			if err == io.EOF {
+		if _, err := io.ReadFull(deltaReader, entryBuf); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
-			return fmt.Errorf("read offset: %w", err)
+			return fmt.Errorf("read entry header: %w", err)
 		}
 
-		var length int32
-		if err := binary.Read(deltaF, binary.LittleEndian, &length); err != nil {
-			return fmt.Errorf("read length: %w", err)
-		}
+		offset := int64(binary.LittleEndian.Uint64(entryBuf[0:8]))
+		length := int32(binary.LittleEndian.Uint32(entryBuf[8:12]))
 
-		data := make([]byte, length)
-		if _, err := io.ReadFull(deltaF, data); err != nil {
+		if int(length) > len(data) {
+			data = make([]byte, length)
+		}
+		if _, err := io.ReadFull(deltaReader, data[:length]); err != nil {
 			return fmt.Errorf("read block data: %w", err)
 		}
 
-		// Extend file if writing beyond current size.
 		if offset+int64(length) > outStat.Size() {
 			if err := outF.Truncate(offset + int64(length)); err != nil {
 				return fmt.Errorf("extend output: %w", err)
 			}
+			outStat, _ = outF.Stat()
 		}
 
-		if _, err := outF.WriteAt(data, offset); err != nil {
+		if _, err := outF.WriteAt(data[:length], offset); err != nil {
 			return fmt.Errorf("write block at offset %d: %w", offset, err)
 		}
 	}
@@ -187,4 +192,52 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
+}
+
+// capRootfsSize ensures the rootfs image does not exceed maxMiB.
+// If the image is larger, it shrinks the ext4 filesystem first, then truncates.
+// If smaller, it extends the file and grows the filesystem to use the full space.
+func capRootfsSize(ctx context.Context, rootfsPath string, maxMiB int) error {
+	if maxMiB <= 0 {
+		return nil
+	}
+
+	maxBytes := int64(maxMiB) * 1024 * 1024
+
+	fi, err := os.Stat(rootfsPath)
+	if err != nil {
+		return fmt.Errorf("stat rootfs: %w", err)
+	}
+
+	current := fi.Size()
+	slog.Info("rootfs size check", "current_mib", current/(1024*1024), "max_mib", maxMiB)
+
+	if current > maxBytes {
+		// Shrink: fsck, resize filesystem down, then truncate the file.
+		if err := run(ctx, "e2fsck", "-fy", rootfsPath); err != nil {
+			slog.Warn("e2fsck failed (may be ok for clean fs)", "error", err)
+		}
+		sizeArg := fmt.Sprintf("%dM", maxMiB)
+		if err := run(ctx, "resize2fs", rootfsPath, sizeArg); err != nil {
+			return fmt.Errorf("resize2fs shrink: %w", err)
+		}
+		if err := os.Truncate(rootfsPath, maxBytes); err != nil {
+			return fmt.Errorf("truncate rootfs: %w", err)
+		}
+		slog.Info("rootfs shrunk", "new_mib", maxMiB)
+	} else if current < maxBytes {
+		// Grow: extend the sparse file, then expand the filesystem.
+		if err := os.Truncate(rootfsPath, maxBytes); err != nil {
+			return fmt.Errorf("extend rootfs: %w", err)
+		}
+		if err := run(ctx, "e2fsck", "-fy", rootfsPath); err != nil {
+			slog.Warn("e2fsck failed (may be ok for clean fs)", "error", err)
+		}
+		if err := run(ctx, "resize2fs", rootfsPath); err != nil {
+			return fmt.Errorf("resize2fs grow: %w", err)
+		}
+		slog.Info("rootfs extended", "new_mib", maxMiB)
+	}
+
+	return nil
 }

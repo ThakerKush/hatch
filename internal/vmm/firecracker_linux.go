@@ -132,7 +132,7 @@ func newMachineFromSnapshot(ctx context.Context, binaryPath string, cfg machineC
 		Snapshot: firecracker.SnapshotConfig{
 			MemFilePath:         memPath,
 			SnapshotPath:        statePath,
-			EnableDiffSnapshots: false,
+			EnableDiffSnapshots: true,
 			ResumeVM:            true,
 		},
 		VMID: cfg.vmID,
