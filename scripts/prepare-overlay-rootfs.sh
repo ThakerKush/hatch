@@ -12,7 +12,7 @@ case "$(uname -m)" in
     *)       ARCH="$(uname -m)" ;;
 esac
 
-echo "[1/4] Config"
+echo "[1/5] Config"
 echo "  ROOTFS=$ROOTFS"
 echo "  ARCH=$ARCH"
 echo "  REDOWNLOAD=${REDOWNLOAD:-0}"
@@ -21,12 +21,28 @@ echo "  REDOWNLOAD=${REDOWNLOAD:-0}"
 
 if [ "${REDOWNLOAD:-}" = "1" ]; then
     mkdir -p "$(dirname "$ROOTFS")"
+    QCOW2_TMP="$(dirname "$ROOTFS")/base-download.qcow2"
+
     echo ""
-    echo "[2/4] Downloading clean base image..."
+    echo "[2/5] Downloading clean base image..."
     URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-${ARCH}.img"
     echo "  URL=$URL"
-    wget -v -O "$ROOTFS" "$URL"
-    echo "  Download complete: $(ls -lh "$ROOTFS" | awk '{print $5}')"
+    wget -v -O "$QCOW2_TMP" "$URL"
+    echo "  Download complete: $(ls -lh "$QCOW2_TMP" | awk '{print $5}')"
+
+    echo ""
+    echo "[3/5] Converting QCOW2 → raw ext4..."
+    if ! command -v qemu-img &>/dev/null; then
+        echo "  qemu-img not found, installing qemu-utils..."
+        apt-get update -qq && apt-get install -y -qq qemu-utils
+    fi
+    qemu-img convert -f qcow2 -O raw "$QCOW2_TMP" "$ROOTFS"
+    rm -f "$QCOW2_TMP"
+    echo "  Converted: $(ls -lh "$ROOTFS" | awk '{print $5}')"
+else
+    echo ""
+    echo "[2/5] Skipping download (REDOWNLOAD not set)"
+    echo "[3/5] Skipping QCOW2 conversion"
 fi
 
 if [ ! -f "$ROOTFS" ]; then
@@ -46,7 +62,7 @@ CURRENT_BYTES=$(stat --printf="%s" "$ROOTFS" 2>/dev/null || stat -f "%z" "$ROOTF
 CURRENT_MIB=$((CURRENT_BYTES / 1024 / 1024))
 
 echo ""
-echo "[3/4] Size check"
+echo "[4/5] Size check"
 echo "  Current: ${CURRENT_MIB}M"
 echo "  Target:  ${TARGET_MIB}M"
 
@@ -63,7 +79,7 @@ fi
 # ── Inject /sbin/overlay-init ────────────────────────────────────────────────
 
 echo ""
-echo "[4/4] Injecting /sbin/overlay-init"
+echo "[5/5] Injecting /sbin/overlay-init"
 
 MOUNT_DIR=$(mktemp -d)
 echo "  Mount dir: $MOUNT_DIR"
