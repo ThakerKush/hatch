@@ -14,7 +14,28 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Hatch",
-  description: "Minimal API key dashboard for Hatch",
+  description: "A lightweight microVM orchestrator designed for agnatic workloads",
+  openGraph: {
+    title: "Hatch",
+    description: "A lightweight microVM orchestrator designed for agnatic workloads",
+    url: "https://hatchvm.com",
+    siteName: "Hatch",
+    images: [
+      {
+        url: "https://hatchvm.com/og/ogImage.png",
+        width: 1200,
+        height: 630,
+        alt: "Hatch – microVM orchestration",
+      },
+    ],
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Hatch",
+    description: "Lightweight microVM orchestration for AI agents.",
+    images: ["https://hatchvm.com/og/ogImage.png"],
+  },
 };
 
 export default function RootLayout({
