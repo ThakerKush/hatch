@@ -13,11 +13,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Hatch",
-  description: "A lightweight microVM orchestrator designed for agnatic workloads",
+  title: "Hatch - A lightweight microVM orchestrator designed for agnatic workloads",
+  description: "Hatch is a wrapper around Firecracker for spnning up microVMs, designed for agentic workloads, with a REST api for lifecycle mangement, wake-on-request, snapshot/restore for idel VMs and subdomain-based reverse proxy.",
   openGraph: {
-    title: "Hatch",
-    description: "A lightweight microVM orchestrator designed for agnatic workloads",
+    title: "Hatch - A lightweight microVM orchestrator designed for agnatic workloads",
+    description: "Hatch is a wrapper around Firecracker for spnning up microVMs, designed for agentic workloads, with a REST api for lifecycle mangement, wake-on-request, snapshot/restore for idel VMs and subdomain-based reverse proxy.",
     url: "https://hatchvm.com",
     siteName: "Hatch",
     images: [
