@@ -50,7 +50,7 @@ When a networked VM is created, Hatch sets up a full Linux networking stack on t
 
 4. **DHCP reservation** — the MAC → IP mapping is written into dnsmasq's hosts file and dnsmasq is signalled (`SIGHUP`) to reload. The DHCP is deterministic: the IP is pre-decided on the host, dnsmasq just delivers it to the guest.
 
-5. **cloud-init injection** — Hatch loop-mounts the VM's rootfs image on the host and writes a `network-config` file into `/var/lib/cloud/seed/nocloud/` inside it:
+5. **cloud-init injection** — Hatch loop-mounts the VM's writable `overlay.ext4` and writes a `network-config` file into `upper/var/lib/cloud/seed/nocloud/` inside it:
    ```yaml
    version: 2
    ethernets:
@@ -59,7 +59,7 @@ When a networked VM is created, Hatch sets up a full Linux networking stack on t
          macaddress: "aa:bb:cc:dd:ee:ff"
        dhcp4: true
    ```
-   When the guest boots, cloud-init finds this file and runs DHCP on `eth0`. The request travels `eth0 → TAP → bridge → dnsmasq`, and the guest gets back exactly the IP Hatch pre-allocated. No manual configuration inside the guest.
+   When the guest boots, the base rootfs is mounted read-only as `/dev/vda`, the per-VM overlay is attached as `/dev/vdb`, and the guest's `overlay-init` script mounts them together with OverlayFS before systemd starts. Cloud-init then finds the seeded files at the normal `/var/lib/cloud/seed/nocloud/` path, runs DHCP on `eth0`, and the request travels `eth0 → TAP → bridge → dnsmasq`. The guest gets back exactly the IP Hatch pre-allocated with no manual configuration inside the VM.
 
 6. **NAT** — iptables MASQUERADE rule on the bridge subnet lets VMs reach the internet through the host's real NIC.
 
@@ -115,11 +115,11 @@ idle timer fires
 
 ### Snapshots
 
-Snapshots capture the full VM state — CPU registers, memory, and a disk delta — and upload them to S3-compatible storage. Restore downloads and replays them into a fresh Firecracker process. The VM resumes from exactly where it was paused, with the same IP, MAC, and SSH port.
+Snapshots capture the full VM state — CPU registers, memory, and the VM's writable overlay disk — and upload them to S3-compatible storage. Restore downloads the overlay, re-attaches the shared base rootfs read-only, and replays the snapshot into a fresh Firecracker process. The VM resumes from exactly where it was paused, with the same IP, MAC, and SSH port.
 
 ```
-Snapshot:  pause VM → dump memory + vmstate → diff rootfs → upload to S3 → kill Firecracker
-Restore:   download from S3 → apply disk delta → new Firecracker process → load snapshot → resume
+Snapshot:  pause VM → dump memory + vmstate → upload writable overlay → kill Firecracker
+Restore:   download writable overlay → new Firecracker process → load snapshot → resume
 ```
 
 

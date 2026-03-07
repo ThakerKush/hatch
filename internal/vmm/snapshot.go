@@ -82,31 +82,27 @@ func (m *Manager) Snapshot(ctx context.Context, vmID string) (*store.Snapshot, e
 		return nil, fmt.Errorf("create snapshot: %w", err)
 	}
 
-	// 3. Compute disk delta (only user changes vs base image).
-	vmRootfs := filepath.Join(vm.WorkDir, "rootfs.ext4")
-	deltaPath := filepath.Join(snapDir, "disk.delta")
-	slog.Info("computing disk delta", "base", image.RootfsPath, "modified", vmRootfs)
-	if err := ComputeDelta(image.RootfsPath, vmRootfs, deltaPath); err != nil {
-		return nil, fmt.Errorf("compute disk delta: %w", err)
-	}
+	// 3. Persist only the writable overlay image; the base rootfs remains the
+	// shared image referenced by RootfsPath in the snapshot config.
+	overlayPath := filepath.Join(vm.WorkDir, "overlay.ext4")
 
 	// 4. Upload artefacts to S3 in parallel (compressed where beneficial).
 	prefix := fmt.Sprintf("snapshots/%s/%s", vmID, snapID)
 	stateKey := prefix + "/vmstate"
 	memKey := prefix + "/memory.gz"
-	diskKey := prefix + "/disk.delta.gz"
+	diskKey := prefix + "/overlay.ext4.gz"
 
 	g, uploadCtx := errgroup.WithContext(ctx)
 	g.Go(func() error { return m.s3.UploadFile(uploadCtx, stateKey, statePath) })
 	g.Go(func() error { return m.s3.UploadFileCompressed(uploadCtx, memKey, memPath) })
-	g.Go(func() error { return m.s3.UploadFileCompressed(uploadCtx, diskKey, deltaPath) })
+	g.Go(func() error { return m.s3.UploadFileCompressed(uploadCtx, diskKey, overlayPath) })
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
 	// Calculate total size of local artefacts before compression.
 	var totalSize int64
-	for _, p := range []string{statePath, memPath, deltaPath} {
+	for _, p := range []string{statePath, memPath, overlayPath} {
 		if fi, err := os.Stat(p); err == nil {
 			totalSize += fi.Size()
 		}
@@ -198,26 +194,18 @@ func (m *Manager) Restore(ctx context.Context, vmID string) (*store.VM, error) {
 	socketPath := filepath.Join(vmDir, "firecracker.socket")
 	_ = os.RemoveAll(socketPath)
 
-	// Download snapshot artefacts (memory and delta are gzip-compressed).
+	// Download snapshot artefacts (memory and overlay are gzip-compressed).
 	memPath := filepath.Join(vmDir, "memory")
 	statePath := filepath.Join(vmDir, "vmstate")
-	deltaPath := filepath.Join(vmDir, "disk.delta")
-	diskPath := filepath.Join(vmDir, "rootfs.ext4")
+	overlayPath := filepath.Join(vmDir, "overlay.ext4")
 
 	g, dlCtx := errgroup.WithContext(ctx)
 	g.Go(func() error { return m.s3.DownloadCompressed(dlCtx, snap.MemoryKey, memPath) })
 	g.Go(func() error { return m.s3.Download(dlCtx, snap.StateKey, statePath) })
-	g.Go(func() error { return m.s3.DownloadCompressed(dlCtx, snap.DiskKey, deltaPath) })
+	g.Go(func() error { return m.s3.DownloadCompressed(dlCtx, snap.DiskKey, overlayPath) })
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-
-	// Reconstruct the per-VM rootfs: base image + delta of user changes.
-	slog.Info("reconstructing rootfs from base + delta", "vm", vmID)
-	if err := ApplyDelta(cfg.RootfsPath, deltaPath, diskPath); err != nil {
-		return nil, fmt.Errorf("apply disk delta: %w", err)
-	}
-	_ = os.Remove(deltaPath)
 
 	// Re-establish networking.
 	tapName := fmt.Sprintf("fctap-%s", vmID[:8])
@@ -240,7 +228,8 @@ func (m *Manager) Restore(ctx context.Context, vmID string) (*store.VM, error) {
 	machine, err := newMachineFromSnapshot(ctx, m.cfg.FirecrackerBinary, machineConfig{
 		socketPath: socketPath,
 		kernelPath: cfg.KernelPath,
-		rootfsPath: diskPath,
+		rootfsPath: cfg.RootfsPath,
+		overlayPath: overlayPath,
 		vmID:       vmID,
 		vcpuCount:  int64(cfg.VCPUCount),
 		memMib:     int64(cfg.MemMib),

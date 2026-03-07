@@ -75,16 +75,13 @@ func patchHomeOwnership(userData string) (string, error) {
 	return header + "\n" + string(patched), nil
 }
 
-// InjectCloudInitSeed writes NoCloud seed files (meta-data, user-data,
-// network-config) directly into the per-VM rootfs at the well-known path
-// /var/lib/cloud/seed/nocloud/. Cloud-init checks this directory before
-// scanning for labeled disks, so no external cidata drive is needed.
-// This avoids filesystem-format compatibility issues with minimal Firecracker
-// kernels that lack vfat/iso9660 support.
-//
-// The rootfs must be an ext4 image file (not currently mounted by a VM).
-func InjectCloudInitSeed(ctx context.Context, rootfsPath, vmDir, instanceID, macAddr, userData string) error {
-	srcDir := filepath.Join(vmDir, "cidata-src")
+// InjectCloudInitSeed writes NoCloud seed files into the writable overlay
+// image under upper/var/lib/cloud/seed/nocloud/. At boot the guest's
+// overlay-init mounts that image and overlays upper/ on top of the shared
+// read-only base rootfs, so cloud-init sees the seed files at the normal
+// /var/lib/cloud/seed/nocloud/ path.
+func InjectCloudInitSeed(ctx context.Context, overlayPath, vmDir, instanceID, macAddr, userData string) error {
+	srcDir := filepath.Join(vmDir, "seed-src")
 	if err := os.MkdirAll(srcDir, 0o755); err != nil {
 		return fmt.Errorf("create seed source dir: %w", err)
 	}
@@ -115,20 +112,28 @@ func InjectCloudInitSeed(ctx context.Context, rootfsPath, vmDir, instanceID, mac
 		return fmt.Errorf("write network-config: %w", err)
 	}
 
-	mountDir := filepath.Join(vmDir, "rootfs-mount")
+	mountDir := filepath.Join(vmDir, "overlay-mount")
 	if err := os.MkdirAll(mountDir, 0o755); err != nil {
 		return fmt.Errorf("create mount dir: %w", err)
 	}
 	defer os.RemoveAll(mountDir)
 
-	if err := run(ctx, "mount", "-o", "loop", rootfsPath, mountDir); err != nil {
-		return fmt.Errorf("mount rootfs: %w", err)
+	if err := run(ctx, "mount", "-o", "loop", overlayPath, mountDir); err != nil {
+		return fmt.Errorf("mount overlay: %w", err)
 	}
 	defer run(context.Background(), "umount", mountDir)
 
-	seedDir := filepath.Join(mountDir, "var", "lib", "cloud", "seed", "nocloud")
+	upperDir := filepath.Join(mountDir, "upper")
+	if err := os.MkdirAll(upperDir, 0o755); err != nil {
+		return fmt.Errorf("create overlay upper dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(mountDir, "work"), 0o755); err != nil {
+		return fmt.Errorf("create overlay work dir: %w", err)
+	}
+
+	seedDir := filepath.Join(upperDir, "var", "lib", "cloud", "seed", "nocloud")
 	if err := os.MkdirAll(seedDir, 0o755); err != nil {
-		return fmt.Errorf("create seed dir in rootfs: %w", err)
+		return fmt.Errorf("create seed dir in overlay: %w", err)
 	}
 
 	for _, name := range []string{"meta-data", "user-data", "network-config"} {
@@ -137,7 +142,7 @@ func InjectCloudInitSeed(ctx context.Context, rootfsPath, vmDir, instanceID, mac
 			return fmt.Errorf("read %s: %w", name, err)
 		}
 		if err := os.WriteFile(filepath.Join(seedDir, name), data, 0o644); err != nil {
-			return fmt.Errorf("write %s to rootfs: %w", name, err)
+			return fmt.Errorf("write %s to overlay: %w", name, err)
 		}
 	}
 

@@ -4,6 +4,7 @@ package vmm
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,24 +27,23 @@ func (f *fcMachine) CreateSnapshot(ctx context.Context, memFilePath, snapshotPat
 }
 
 func newMachine(ctx context.Context, binaryPath string, cfg machineConfig) (machineHandle, error) {
+	if cfg.overlayPath == "" {
+		return nil, fmt.Errorf("overlay path is required")
+	}
+
 	drives := []fcmodels.Drive{
 		{
 			DriveID:      firecracker.String("rootfs"),
 			PathOnHost:   firecracker.String(cfg.rootfsPath),
 			IsRootDevice: firecracker.Bool(true),
+			IsReadOnly:   firecracker.Bool(true),
+		},
+		{
+			DriveID:      firecracker.String("overlay"),
+			PathOnHost:   firecracker.String(cfg.overlayPath),
+			IsRootDevice: firecracker.Bool(false),
 			IsReadOnly:   firecracker.Bool(false),
 		},
-	}
-
-	// Attach the cloud-init NoCloud seed disk so the guest can auto-configure
-	// networking via DHCP. cloud-init detects it by the "cidata" filesystem label.
-	if cfg.cloudInitPath != "" {
-		drives = append(drives, fcmodels.Drive{
-			DriveID:      firecracker.String("cidata"),
-			PathOnHost:   firecracker.String(cfg.cloudInitPath),
-			IsRootDevice: firecracker.Bool(false),
-			IsReadOnly:   firecracker.Bool(true),
-		})
 	}
 
 	var networkInterfaces firecracker.NetworkInterfaces
@@ -98,11 +98,21 @@ func newMachine(ctx context.Context, binaryPath string, cfg machineConfig) (mach
 // newMachineFromSnapshot creates a Firecracker machine that resumes from a
 // previously-created snapshot (memory + vmstate files).
 func newMachineFromSnapshot(ctx context.Context, binaryPath string, cfg machineConfig, memPath, statePath string) (machineHandle, error) {
+	if cfg.overlayPath == "" {
+		return nil, fmt.Errorf("overlay path is required")
+	}
+
 	drives := []fcmodels.Drive{
 		{
 			DriveID:      firecracker.String("rootfs"),
 			PathOnHost:   firecracker.String(cfg.rootfsPath),
 			IsRootDevice: firecracker.Bool(true),
+			IsReadOnly:   firecracker.Bool(true),
+		},
+		{
+			DriveID:      firecracker.String("overlay"),
+			PathOnHost:   firecracker.String(cfg.overlayPath),
+			IsRootDevice: firecracker.Bool(false),
 			IsReadOnly:   firecracker.Bool(false),
 		},
 	}

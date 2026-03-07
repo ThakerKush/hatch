@@ -22,7 +22,7 @@ type Config struct {
 	MaxSnapshotsPerVM int
 
 	// Firecracker
-	MaxRootfsSizeMiB  int
+	MaxOverlaySizeMiB int
 	FirecrackerBinary string
 	BridgeName        string
 	BridgeCIDR        string
@@ -72,7 +72,10 @@ func LoadFromEnv() Config {
 		DatabaseURL:       envOrDefault("DATABASE_URL", "postgres://hatch:hatch@localhost:5432/hatch?sslmode=disable"),
 		MaxVMsPerUser:     envOrDefaultInt("HATCH_MAX_VMS_PER_USER", 5),
 		MaxSnapshotsPerVM: envOrDefaultInt("HATCH_MAX_SNAPSHOTS_PER_VM", 10),
-		MaxRootfsSizeMiB:  envOrDefaultInt("HATCH_MAX_ROOTFS_SIZE_MIB", 8192),
+		MaxOverlaySizeMiB: envOrDefaultInt(
+			"HATCH_MAX_OVERLAY_SIZE_MIB",
+			envOrDefaultInt("HATCH_MAX_ROOTFS_SIZE_MIB", 2048),
+		),
 		FirecrackerBinary: envOrDefault("HATCH_FIRECRACKER_BIN", "firecracker"),
 		BridgeName:        envOrDefault("HATCH_BRIDGE_NAME", "fcbr0"),
 		BridgeCIDR:        envOrDefault("HATCH_BRIDGE_CIDR", "172.16.0.1/24"),
@@ -80,7 +83,7 @@ func LoadFromEnv() Config {
 		DefaultMemMib:     envOrDefaultInt("HATCH_DEFAULT_MEM_MIB", 512),
 		DefaultBootArgs: envOrDefault(
 			"HATCH_DEFAULT_BOOT_ARGS",
-			"console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw rootfstype=ext4",
+			"console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda ro rootfstype=ext4 init=/sbin/overlay-init",
 		),
 
 		// Default image

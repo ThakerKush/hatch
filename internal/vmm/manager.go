@@ -246,22 +246,16 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 		}
 	}
 
-	// Copy the base rootfs so each VM has its own writable disk image.
-	vmRootfs := filepath.Join(vmDir, "rootfs.ext4")
-	if err := run(ctx, "cp", "--sparse=always", "--reflink=auto", image.RootfsPath, vmRootfs); err != nil {
+	// Create a sparse writable overlay image while keeping the base rootfs
+	// shared and read-only across VMs.
+	overlayPath := filepath.Join(vmDir, "overlay.ext4")
+	if err := createOverlayImage(ctx, overlayPath, m.cfg.MaxOverlaySizeMiB); err != nil {
 		m.markError(vmID, err)
 		m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
-		return nil, fmt.Errorf("copy rootfs for vm: %w", err)
+		return nil, fmt.Errorf("create overlay image: %w", err)
 	}
 
-	// Cap rootfs to configured maximum size.
-	if err := capRootfsSize(ctx, vmRootfs, m.cfg.MaxRootfsSizeMiB); err != nil {
-		m.markError(vmID, err)
-		m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
-		return nil, fmt.Errorf("cap rootfs size: %w", err)
-	}
-
-	if err := InjectCloudInitSeed(ctx, vmRootfs, vmDir, vmID, macAddr, opts.UserData); err != nil {
+	if err := InjectCloudInitSeed(ctx, overlayPath, vmDir, vmID, macAddr, opts.UserData); err != nil {
 		m.markError(vmID, err)
 		m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 		return nil, fmt.Errorf("inject cloud-init seed: %w", err)
@@ -274,12 +268,14 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 	if bootArgs == "" {
 		bootArgs = m.cfg.DefaultBootArgs
 	}
+	bootArgs = ensureOverlayBootArgs(bootArgs)
 
 	machine, err := newMachine(ctx, m.cfg.FirecrackerBinary, machineConfig{
 		socketPath: socketPath,
 		kernelPath: image.KernelPath,
 		kernelArgs: bootArgs,
-		rootfsPath: vmRootfs,
+		rootfsPath: image.RootfsPath,
+		overlayPath: overlayPath,
 		vmID:       vmID,
 		vcpuCount:  int64(vm.VCPUCount),
 		memMib:     int64(vm.MemMib),
@@ -556,11 +552,11 @@ type machineConfig struct {
 	kernelPath    string
 	kernelArgs    string
 	rootfsPath    string
+	overlayPath   string
 	vmID          string
 	vcpuCount     int64
 	memMib        int64
 	tapName       string
 	macAddr       string
 	logDir        string
-	cloudInitPath string // NoCloud seed disk (attached as /dev/vdb)
 }
