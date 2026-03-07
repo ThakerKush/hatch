@@ -6,21 +6,31 @@ set -euo pipefail
 ROOTFS="${1:-/root/firecracker/ubuntu-noble-rootfs.ext4}"
 ARCH="$(uname -m)"
 
-if [ ! -f "$ROOTFS" ]; then
-    echo "Rootfs not found at $ROOTFS"
-    echo "Usage: sudo $0 [path-to-rootfs.ext4]"
-    echo ""
-    echo "If you haven't downloaded the base image yet, run install-deps.sh first."
-    exit 1
-fi
+echo "[1/4] Config"
+echo "  ROOTFS=$ROOTFS"
+echo "  ARCH=$ARCH"
+echo "  REDOWNLOAD=${REDOWNLOAD:-0}"
 
 # ── Re-download a clean base image if requested ──────────────────────────────
 
 if [ "${REDOWNLOAD:-}" = "1" ]; then
-    echo "Re-downloading clean base image..."
-    wget -q --show-progress -O "$ROOTFS" \
-        "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-${ARCH}.img"
-    echo "Clean base image downloaded."
+    mkdir -p "$(dirname "$ROOTFS")"
+    echo ""
+    echo "[2/4] Downloading clean base image..."
+    URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-${ARCH}.img"
+    echo "  URL=$URL"
+    wget -v -O "$ROOTFS" "$URL"
+    echo "  Download complete: $(ls -lh "$ROOTFS" | awk '{print $5}')"
+fi
+
+if [ ! -f "$ROOTFS" ]; then
+    echo ""
+    echo "ERROR: Rootfs not found at $ROOTFS"
+    echo "Usage: sudo REDOWNLOAD=1 $0 [path-to-rootfs.ext4]"
+    echo ""
+    echo "If you haven't downloaded the base image yet, run install-deps.sh first"
+    echo "or use REDOWNLOAD=1."
+    exit 1
 fi
 
 # ── Shrink the image if it's larger than the target ──────────────────────────
@@ -29,20 +39,32 @@ TARGET_MIB="${TARGET_SIZE_MIB:-2048}"
 CURRENT_BYTES=$(stat --printf="%s" "$ROOTFS" 2>/dev/null || stat -f "%z" "$ROOTFS")
 CURRENT_MIB=$((CURRENT_BYTES / 1024 / 1024))
 
+echo ""
+echo "[3/4] Size check"
+echo "  Current: ${CURRENT_MIB}M"
+echo "  Target:  ${TARGET_MIB}M"
+
 if [ "$CURRENT_MIB" -gt "$TARGET_MIB" ]; then
-    echo "Base image is ${CURRENT_MIB}M, shrinking to ${TARGET_MIB}M..."
+    echo "  Shrinking..."
     e2fsck -fy "$ROOTFS" || true
     resize2fs "$ROOTFS" "${TARGET_MIB}M"
     truncate -s "${TARGET_MIB}M" "$ROOTFS"
-    echo "Base image shrunk to ${TARGET_MIB}M."
+    echo "  Shrunk to ${TARGET_MIB}M."
+else
+    echo "  No shrink needed."
 fi
 
 # ── Inject /sbin/overlay-init ────────────────────────────────────────────────
 
+echo ""
+echo "[4/4] Injecting /sbin/overlay-init"
+
 MOUNT_DIR=$(mktemp -d)
+echo "  Mount dir: $MOUNT_DIR"
 trap 'umount "$MOUNT_DIR" 2>/dev/null; rmdir "$MOUNT_DIR" 2>/dev/null' EXIT
 
 mount -o loop "$ROOTFS" "$MOUNT_DIR"
+echo "  Mounted $ROOTFS"
 
 cat > "${MOUNT_DIR}/sbin/overlay-init" <<'INITEOF'
 #!/bin/sh
@@ -81,6 +103,7 @@ exec /sbin/init "$@"
 INITEOF
 
 chmod 0755 "${MOUNT_DIR}/sbin/overlay-init"
+echo "  Written: $(ls -l "${MOUNT_DIR}/sbin/overlay-init")"
 sync
 
 umount "$MOUNT_DIR"
