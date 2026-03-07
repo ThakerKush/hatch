@@ -4,7 +4,13 @@ set -euo pipefail
 [ "$EUID" -eq 0 ] || { echo "Run as root: sudo $0"; exit 1; }
 
 ROOTFS="${1:-/root/firecracker/ubuntu-noble-rootfs.ext4}"
-ARCH="$(uname -m)"
+
+# Ubuntu cloud images use "amd64" / "arm64", not uname's "x86_64" / "aarch64".
+case "$(uname -m)" in
+    x86_64)  ARCH="amd64" ;;
+    aarch64) ARCH="arm64" ;;
+    *)       ARCH="$(uname -m)" ;;
+esac
 
 echo "[1/4] Config"
 echo "  ROOTFS=$ROOTFS"
