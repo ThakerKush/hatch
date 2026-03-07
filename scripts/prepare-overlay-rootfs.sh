@@ -31,14 +31,46 @@ if [ "${REDOWNLOAD:-}" = "1" ]; then
     echo "  Download complete: $(ls -lh "$QCOW2_TMP" | awk '{print $5}')"
 
     echo ""
-    echo "[3/5] Converting QCOW2 → raw ext4..."
+    echo "[3/5] Converting QCOW2 → bare ext4 root partition..."
     if ! command -v qemu-img &>/dev/null; then
         echo "  qemu-img not found, installing qemu-utils..."
         apt-get update -qq && apt-get install -y -qq qemu-utils
     fi
-    qemu-img convert -f qcow2 -O raw "$QCOW2_TMP" "$ROOTFS"
+
+    RAW_TMP="$(dirname "$ROOTFS")/base-download.raw"
+    qemu-img convert -f qcow2 -O raw "$QCOW2_TMP" "$RAW_TMP"
     rm -f "$QCOW2_TMP"
-    echo "  Converted: $(ls -lh "$ROOTFS" | awk '{print $5}')"
+    echo "  Raw disk: $(ls -lh "$RAW_TMP" | awk '{print $5}')"
+
+    # The raw image is a full GPT disk. Extract just the root (ext4) partition.
+    LOOP_DEV=$(losetup --find --show --partscan "$RAW_TMP")
+    echo "  Loop device: $LOOP_DEV"
+
+    # Find the largest partition (the root fs, not the EFI boot partition).
+    ROOT_PART=""
+    LARGEST=0
+    for part in "${LOOP_DEV}p"*; do
+        [ -b "$part" ] || continue
+        PSIZE=$(blockdev --getsize64 "$part")
+        echo "  Found partition: $part ($(( PSIZE / 1024 / 1024 ))M)"
+        if [ "$PSIZE" -gt "$LARGEST" ]; then
+            LARGEST=$PSIZE
+            ROOT_PART=$part
+        fi
+    done
+
+    if [ -z "$ROOT_PART" ]; then
+        losetup -d "$LOOP_DEV"
+        rm -f "$RAW_TMP"
+        echo "  ERROR: no partitions found in disk image"
+        exit 1
+    fi
+
+    echo "  Extracting root partition: $ROOT_PART"
+    dd if="$ROOT_PART" of="$ROOTFS" bs=4M status=progress
+    losetup -d "$LOOP_DEV"
+    rm -f "$RAW_TMP"
+    echo "  Extracted: $(ls -lh "$ROOTFS" | awk '{print $5}')"
 else
     echo ""
     echo "[2/5] Skipping download (REDOWNLOAD not set)"
