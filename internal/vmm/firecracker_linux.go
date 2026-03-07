@@ -11,7 +11,6 @@ import (
 
 	firecracker "github.com/firecracker-microvm/firecracker-go-sdk"
 	fcmodels "github.com/firecracker-microvm/firecracker-go-sdk/client/models"
-	ops "github.com/firecracker-microvm/firecracker-go-sdk/client/operations"
 )
 
 // fcMachine wraps the SDK Machine to satisfy machineHandle including snapshot methods.
@@ -24,11 +23,7 @@ func (f *fcMachine) PauseVM(ctx context.Context) error {
 }
 
 func (f *fcMachine) CreateSnapshot(ctx context.Context, memFilePath, snapshotPath string) error {
-	return f.Machine.CreateSnapshot(ctx, memFilePath, snapshotPath,
-		func(params *ops.CreateSnapshotParams) {
-			params.Body.SnapshotType = fcmodels.SnapshotCreateParamsSnapshotTypeDiff
-		},
-	)
+	return f.Machine.CreateSnapshot(ctx, memFilePath, snapshotPath)
 }
 
 func newMachine(ctx context.Context, binaryPath string, cfg machineConfig) (machineHandle, error) {
@@ -73,7 +68,7 @@ func newMachine(ctx context.Context, binaryPath string, cfg machineConfig) (mach
 			VcpuCount:       firecracker.Int64(cfg.vcpuCount),
 			MemSizeMib:      firecracker.Int64(cfg.memMib),
 			Smt:             firecracker.Bool(false),
-			TrackDirtyPages: true,
+			TrackDirtyPages: false,
 		},
 		VMID: cfg.vmID,
 	}
@@ -148,7 +143,7 @@ func newMachineFromSnapshot(ctx context.Context, binaryPath string, cfg machineC
 		Snapshot: firecracker.SnapshotConfig{
 			MemFilePath:         memPath,
 			SnapshotPath:        statePath,
-			EnableDiffSnapshots: true,
+			EnableDiffSnapshots: false,
 			ResumeVM:            true,
 		},
 		VMID: cfg.vmID,
