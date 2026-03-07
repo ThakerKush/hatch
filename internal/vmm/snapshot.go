@@ -89,8 +89,8 @@ func (m *Manager) Snapshot(ctx context.Context, vmID string) (*store.Snapshot, e
 	// 4. Upload artefacts to S3 in parallel (compressed where beneficial).
 	prefix := fmt.Sprintf("snapshots/%s/%s", vmID, snapID)
 	stateKey := prefix + "/vmstate"
-	memKey := prefix + "/memory.gz"
-	diskKey := prefix + "/overlay.ext4.gz"
+	memKey := prefix + "/memory.zst"
+	diskKey := prefix + "/overlay.ext4.zst"
 
 	g, uploadCtx := errgroup.WithContext(ctx)
 	g.Go(func() error { return m.s3.UploadFile(uploadCtx, stateKey, statePath) })

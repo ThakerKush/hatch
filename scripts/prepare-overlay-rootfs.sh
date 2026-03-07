@@ -89,7 +89,7 @@ fi
 
 # ── Shrink the image if it's larger than the target ──────────────────────────
 
-TARGET_MIB="${TARGET_SIZE_MIB:-2048}"
+TARGET_MIB="${TARGET_SIZE_MIB:-3072}"
 CURRENT_BYTES=$(stat --printf="%s" "$ROOTFS" 2>/dev/null || stat -f "%z" "$ROOTFS")
 CURRENT_MIB=$((CURRENT_BYTES / 1024 / 1024))
 
@@ -101,9 +101,12 @@ echo "  Target:  ${TARGET_MIB}M"
 if [ "$CURRENT_MIB" -gt "$TARGET_MIB" ]; then
     echo "  Shrinking..."
     e2fsck -fy "$ROOTFS" || true
-    resize2fs "$ROOTFS" "${TARGET_MIB}M"
-    truncate -s "${TARGET_MIB}M" "$ROOTFS"
-    echo "  Shrunk to ${TARGET_MIB}M."
+    if resize2fs "$ROOTFS" "${TARGET_MIB}M" 2>/dev/null; then
+        truncate -s "${TARGET_MIB}M" "$ROOTFS"
+        echo "  Shrunk to ${TARGET_MIB}M."
+    else
+        echo "  Filesystem minimum is larger than ${TARGET_MIB}M, keeping as-is (${CURRENT_MIB}M)."
+    fi
 else
     echo "  No shrink needed."
 fi
@@ -120,37 +123,54 @@ trap 'umount "$MOUNT_DIR" 2>/dev/null; rmdir "$MOUNT_DIR" 2>/dev/null' EXIT
 mount -o loop "$ROOTFS" "$MOUNT_DIR"
 echo "  Mounted $ROOTFS"
 
+# Pre-create mount points so the init script works on a read-only root.
+mkdir -p "${MOUNT_DIR}/mnt/overlay" "${MOUNT_DIR}/mnt/merged"
+echo "  Pre-created /mnt/overlay and /mnt/merged in base image"
+
+# Remove fstab entries for partitions that don't exist in the Firecracker VM.
+# The base image came from a full GPT disk with UEFI and BOOT partitions that
+# we stripped out. If left in fstab, systemd waits 90s per missing device and
+# then drops to emergency mode.
+if [ -f "${MOUNT_DIR}/etc/fstab" ]; then
+    echo "  Cleaning /etc/fstab..."
+    echo "  Before:"
+    cat "${MOUNT_DIR}/etc/fstab" | sed 's/^/    /'
+    sed -i '/LABEL=UEFI/d; /LABEL=BOOT/d; /by-label\/UEFI/d; /by-label\/BOOT/d' "${MOUNT_DIR}/etc/fstab"
+    echo "  After:"
+    cat "${MOUNT_DIR}/etc/fstab" | sed 's/^/    /'
+fi
+
 cat > "${MOUNT_DIR}/sbin/overlay-init" <<'INITEOF'
 #!/bin/sh
-set -eu
+# Early init script that sets up OverlayFS before handing off to systemd.
+# Runs on a read-only root, so /etc/mtab updates will fail -- use -n flag
+# on all mount calls to skip mtab writes.
 
 if [ ! -b /dev/vdb ]; then
     exec /sbin/init "$@"
 fi
 
-mkdir -p /mnt/overlay /mnt/merged
-
-mount -t ext4 /dev/vdb /mnt/overlay
+mount -n -t ext4 /dev/vdb /mnt/overlay
 mkdir -p /mnt/overlay/upper /mnt/overlay/work
 
-mount -t overlay overlay \
+mount -n -t overlay overlay \
     -o lowerdir=/,upperdir=/mnt/overlay/upper,workdir=/mnt/overlay/work \
     /mnt/merged
 
 mkdir -p /mnt/merged/.overlay-backing
-mount --move /mnt/overlay /mnt/merged/.overlay-backing
+mount -n --move /mnt/overlay /mnt/merged/.overlay-backing
 
 cd /mnt/merged
 mkdir -p .pivot-old
 pivot_root . .pivot-old
 
-mount -t proc proc /proc 2>/dev/null || true
-mount -t sysfs sysfs /sys 2>/dev/null || true
-mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -n -t proc proc /proc 2>/dev/null || true
+mount -n -t sysfs sysfs /sys 2>/dev/null || true
+mount -n -t devtmpfs devtmpfs /dev 2>/dev/null || true
 mkdir -p /dev/pts /dev/shm /run
-mount -t devpts devpts /dev/pts 2>/dev/null || true
-mount -t tmpfs tmpfs /dev/shm 2>/dev/null || true
-mount -t tmpfs tmpfs /run 2>/dev/null || true
+mount -n -t devpts devpts /dev/pts 2>/dev/null || true
+mount -n -t tmpfs tmpfs /dev/shm 2>/dev/null || true
+mount -n -t tmpfs tmpfs /run 2>/dev/null || true
 
 umount -l /.pivot-old 2>/dev/null || true
 exec /sbin/init "$@"

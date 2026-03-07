@@ -1,7 +1,6 @@
 package store
 
 import (
-	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/klauspost/compress/zstd"
 )
 
 // S3Config holds configuration for the S3 snapshot storage backend.
@@ -106,9 +106,9 @@ func (c *S3Client) Download(ctx context.Context, key, dest string) error {
 	return nil
 }
 
-// UploadFileCompressed gzip-compresses a local file and uploads it to S3.
-// Compression is written to a temp file so the AWS SDK can seek the body
-// for payload signing and retries.
+// UploadFileCompressed zstd-compresses a local file at fastest speed and
+// uploads it to S3. The compressed data is written to a temp file because
+// the AWS SDK needs a seekable body for payload signing and retries.
 func (c *S3Client) UploadFileCompressed(ctx context.Context, key, filePath string) error {
 	slog.Info("uploading compressed to S3", "bucket", c.bucket, "key", key)
 
@@ -118,19 +118,33 @@ func (c *S3Client) UploadFileCompressed(ctx context.Context, key, filePath strin
 	}
 	defer src.Close()
 
-	tmp, err := os.CreateTemp("", "hatch-gz-*")
+	tmp, err := os.CreateTemp("", "hatch-zst-*")
 	if err != nil {
 		return fmt.Errorf("create temp file for compressed upload: %w", err)
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
 
-	gw := gzip.NewWriter(tmp)
-	if _, err := io.Copy(gw, src); err != nil {
+	enc, err := zstd.NewWriter(tmp, zstd.WithEncoderLevel(zstd.SpeedFastest))
+	if err != nil {
+		return fmt.Errorf("create zstd writer: %w", err)
+	}
+	if _, err := io.Copy(enc, src); err != nil {
+		enc.Close()
 		return fmt.Errorf("compress file: %w", err)
 	}
-	if err := gw.Close(); err != nil {
-		return fmt.Errorf("finalize gzip: %w", err)
+	if err := enc.Close(); err != nil {
+		return fmt.Errorf("finalize zstd: %w", err)
+	}
+
+	compressedStat, _ := tmp.Stat()
+	srcStat, _ := src.Stat()
+	if compressedStat != nil && srcStat != nil {
+		slog.Info("compression done",
+			"key", key,
+			"original_mib", srcStat.Size()/(1024*1024),
+			"compressed_mib", compressedStat.Size()/(1024*1024),
+		)
 	}
 
 	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
@@ -148,7 +162,7 @@ func (c *S3Client) UploadFileCompressed(ctx context.Context, key, filePath strin
 	return nil
 }
 
-// DownloadCompressed fetches a gzip-compressed S3 object, decompresses it,
+// DownloadCompressed fetches a zstd-compressed S3 object, decompresses it,
 // and writes the result to the local dest path.
 func (c *S3Client) DownloadCompressed(ctx context.Context, key, dest string) error {
 	slog.Info("downloading compressed from S3", "bucket", c.bucket, "key", key, "dest", dest)
@@ -161,11 +175,11 @@ func (c *S3Client) DownloadCompressed(ctx context.Context, key, dest string) err
 	}
 	defer out.Body.Close()
 
-	gr, err := gzip.NewReader(out.Body)
+	dec, err := zstd.NewReader(out.Body)
 	if err != nil {
-		return fmt.Errorf("gzip reader: %w", err)
+		return fmt.Errorf("zstd reader: %w", err)
 	}
-	defer gr.Close()
+	defer dec.Close()
 
 	f, err := os.Create(dest)
 	if err != nil {
@@ -173,7 +187,7 @@ func (c *S3Client) DownloadCompressed(ctx context.Context, key, dest string) err
 	}
 	defer f.Close()
 
-	if _, err := io.Copy(f, gr); err != nil {
+	if _, err := io.Copy(f, dec); err != nil {
 		return fmt.Errorf("decompress to dest: %w", err)
 	}
 	return nil
