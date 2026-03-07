@@ -35,27 +35,27 @@ function AuthButton({ label, variant }: { label: string; variant: "outline" | "s
 
 const FEATURES = [
   {
-    cmd: "hatch vm create --vcpu 1 --mem 512",
+    cmd: "curl -X POST api.hatchvm.com/vms",
     label: "Fast lifecycle",
-    desc: "Sub-second microVM boot via Firecracker. Create, start, stop, and destroy in milliseconds — not minutes.",
-    badge: "~80ms boot",
+    desc: "Lightweight microVM boot via Firecracker. Create, stop, and destroy VMs with a single API call.",
+    badge: "firecracker",
   },
   {
-    cmd: "hatch vm snapshot <id>",
+    cmd: "curl -X POST .../vms/{id}/snapshot",
     label: "Snapshot / restore",
-    desc: "Freeze a running VM's full memory and disk state. Restore it instantly later — agents resume exactly where they left off.",
-    badge: "zero-copy restore",
+    desc: "Freeze a running VM's full memory and disk state. Restore it later — agents resume exactly where they left off.",
+    badge: "s3-backed",
   },
   {
-    cmd: "hatch vm create --isolated",
+    cmd: "curl -X POST .../vms -d '{\"user_data\":\"...\"}'",
     label: "Isolated runtime",
-    desc: "Every agent gets a fresh, ephemeral microVM with its own kernel. No shared state, no noisy neighbours, complete workload isolation.",
+    desc: "Every agent gets a fresh, ephemeral microVM with its own kernel. Pass cloud-init user data to provision packages, users, and SSH keys.",
     badge: "per-agent kernel",
   },
   {
-    cmd: "curl https://<vm-id>.hatchvm.com",
+    cmd: "curl -X POST .../vms/{id}/routes",
     label: "Subdomain routing",
-    desc: "Each VM gets its own subdomain. The reverse proxy routes requests to the right VM and auto-wakes snapshotted instances on the first hit.",
+    desc: "Map a custom subdomain to any port on your VM. The reverse proxy routes traffic and auto-wakes snapshotted instances on the first hit.",
     badge: "auto-wake",
   },
 ];
@@ -67,21 +67,22 @@ type TerminalLine =
   | { type: "blank" };
 
 const QUICKSTART: TerminalLine[] = [
-  { type: "comment", text: "# create a microVM" },
-  { type: "command", text: "curl -X POST https://api.hatchvm.com/v1/vms \\" },
-  { type: "output", text: '    -H "x-hatch-api-key: hatch_<key>" \\' },
-  { type: "output", text: `    -d '{"vcpu_count":1,"mem_mib":512}'` },
+  { type: "comment", text: "# create a microVM with cloud-init user data" },
+  { type: "command", text: "curl -X POST https://api.hatchvm.com/vms \\" },
+  { type: "output", text: '    -H "Authorization: Bearer $HATCH_API_KEY" \\' },
+  { type: "output", text: '    -H "Content-Type: application/json" \\' },
+  { type: "output", text: `    -d '{"vcpu_count":2,"mem_mib":1024,"user_data":"#cloud-config\\n..."}'` },
   { type: "blank" },
   { type: "output", text: '{ "id": "vm-a1b2c3", "state": "running" }' },
   { type: "blank" },
   { type: "comment", text: "# snapshot it" },
-  { type: "command", text: "curl -X POST https://api.hatchvm.com/v1/vms/vm-a1b2c3/snapshot \\" },
-  { type: "output", text: '    -H "x-hatch-api-key: hatch_<key>"' },
+  { type: "command", text: "curl -X POST https://api.hatchvm.com/vms/vm-a1b2c3/snapshot \\" },
+  { type: "output", text: '    -H "Authorization: Bearer $HATCH_API_KEY"' },
   { type: "blank" },
-  { type: "output", text: '{ "snapshot_id": "snap-x9y8z7", "ok": true }' },
+  { type: "output", text: '{ "id": "snap-x9y8z7", "vm_id": "vm-a1b2c3" }' },
   { type: "blank" },
   { type: "comment", text: "# hit it via its subdomain — auto-wakes if snapshotted" },
-  { type: "command", text: "curl https://vm-a1b2c3.hatchvm.com/health" },
+  { type: "command", text: "curl https://hatchvm.com/healthz" },
   { type: "blank" },
   { type: "output", text: '{ "status": "ok" }' },
 ];
@@ -131,15 +132,14 @@ export function LandingPage() {
   ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝╚═╝  ╚═╝`}</pre>
 
         <div className="mb-4 text-[11px] tracking-[0.2em] text-zinc-500">
-          $ hatch --version 0.1.0-alpha
+          v0.1.0-alpha · api-first · firecracker-backed
         </div>
 
         <h1 className="mb-3 max-w-xl text-xl leading-8 text-zinc-100">
           Lightweight microVM orchestration for AI agents.
         </h1>
         <p className="mb-10 max-w-xl text-sm leading-7 text-zinc-400">
-          Spin up isolated Firecracker microVMs in milliseconds. Snapshot and restore agent state
-          instantly. Route traffic to any VM via its own subdomain — with auto-wake on the first
+          Spin up isolated Firecracker microVMs. Snapshot and restore agent state. Route traffic to any VM via its own subdomain — with auto-wake on the first
           request.
         </p>
 
@@ -207,7 +207,7 @@ export function LandingPage() {
       <section className="mx-auto max-w-5xl border-t border-zinc-900 px-6 py-20">
         <p className="mb-2 text-lg text-zinc-100">Ready to spin up your first VM?</p>
         <p className="mb-8 text-sm text-zinc-400">
-          Free to start. No credit card required.
+          Free to start.
         </p>
         <AuthButton label="create free account →" variant="solid" />
       </section>

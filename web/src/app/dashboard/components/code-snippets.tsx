@@ -4,49 +4,76 @@ import { useState } from "react";
 
 import { Card } from "@/components/ui/card";
 
-const SNIPPETS: Record<string, { lines: { text: string; dim?: boolean }[] }> = {
+type SnippetLine = { text: string; dim?: boolean };
+
+type Snippet = {
+  lines: SnippetLine[];
+  copyText: string;
+};
+
+// user_data value encoded as a JSON string literal:
+// \n → JSON newline, \" → JSON escaped double-quote.
+// Wrapped in single quotes for the curl -d argument so the shell passes it verbatim.
+const USER_DATA =
+  "#cloud-config\\nhostname: dev-vm\\nusers:\\n" +
+  "  - name: hatch\\n    groups: [sudo]\\n    shell: /bin/bash\\n" +
+  '    sudo: [\\"ALL=(ALL) NOPASSWD:ALL\\"]\\n' +
+  "    ssh_authorized_keys:\\n      - YOUR_SSH_PUBLIC_KEY\\n" +
+  "packages:\\n  - python3\\n  - golang-go\\n  - curl";
+
+const SNIPPETS: Record<string, Snippet> = {
   create: {
     lines: [
-      { text: "$ curl -X POST https://api.hatchvm.com/v1/vms \\" },
-      { text: '    -H "x-hatch-api-key: $HATCH_KEY" \\' },
+      { text: "$ curl -X POST https://api.hatchvm.com/vms \\" },
+      { text: '    -H "Authorization: Bearer $HATCH_API_KEY" \\' },
       { text: '    -H "Content-Type: application/json" \\' },
-      { text: `    -d '{"vcpu_count":2,"mem_mib":1024}'` },
+      { text: `    -d '{"vcpu_count":2,"mem_mib":1024,` },
+      { text: `       "user_data":"#cloud-config\\nhostname: dev-vm\\n..."}'` },
       { text: "" },
       { text: '{ "id": "vm-a1b2c3", "state": "running" }', dim: true },
     ],
+    copyText:
+      "curl -X POST https://api.hatchvm.com/vms \\\n" +
+      '    -H "Authorization: Bearer $HATCH_API_KEY" \\\n' +
+      '    -H "Content-Type: application/json" \\\n' +
+      `    -d '{"vcpu_count":2,"mem_mib":1024,"user_data":"${USER_DATA}"}'`,
   },
   list: {
     lines: [
-      { text: "$ curl https://api.hatchvm.com/v1/vms \\" },
-      { text: '    -H "x-hatch-api-key: $HATCH_KEY"' },
+      { text: "$ curl https://api.hatchvm.com/vms \\" },
+      { text: '    -H "Authorization: Bearer $HATCH_API_KEY"' },
       { text: "" },
-      { text: '[ { "id": "vm-a1b2c3", "state": "running" }, ... ]', dim: true },
+      { text: '[{ "id": "vm-a1b2c3", "state": "running" }, ...]', dim: true },
     ],
+    copyText:
+      "curl https://api.hatchvm.com/vms \\\n" +
+      '    -H "Authorization: Bearer $HATCH_API_KEY"',
   },
   snapshot: {
     lines: [
-      { text: "$ curl -X POST https://api.hatchvm.com/v1/vms/vm-a1b2c3/snapshot \\" },
-      { text: '    -H "x-hatch-api-key: $HATCH_KEY"' },
+      { text: "$ curl -X POST https://api.hatchvm.com/vms/vm-a1b2c3/snapshot \\" },
+      { text: '    -H "Authorization: Bearer $HATCH_API_KEY"' },
       { text: "" },
-      { text: '{ "snapshot_id": "snap-x9y8z7", "ok": true }', dim: true },
+      { text: '{ "id": "snap-x9y8z7", "vm_id": "vm-a1b2c3" }', dim: true },
     ],
+    copyText:
+      "curl -X POST https://api.hatchvm.com/vms/vm-a1b2c3/snapshot \\\n" +
+      '    -H "Authorization: Bearer $HATCH_API_KEY"',
   },
   restore: {
     lines: [
-      { text: "$ curl -X POST https://api.hatchvm.com/v1/vms/vm-a1b2c3/restore \\" },
-      { text: '    -H "x-hatch-api-key: $HATCH_KEY" \\' },
-      { text: '    -d \'{"snapshot_id":"snap-x9y8z7"}\'' },
+      { text: "$ curl -X POST https://api.hatchvm.com/vms/vm-a1b2c3/restore \\" },
+      { text: '    -H "Authorization: Bearer $HATCH_API_KEY"' },
       { text: "" },
-      { text: '{ "state": "running", "ok": true }', dim: true },
+      { text: '{ "id": "vm-a1b2c3", "state": "running" }', dim: true },
     ],
+    copyText:
+      "curl -X POST https://api.hatchvm.com/vms/vm-a1b2c3/restore \\\n" +
+      '    -H "Authorization: Bearer $HATCH_API_KEY"',
   },
 };
 
 type SnippetKey = keyof typeof SNIPPETS;
-
-function toPlainText(key: SnippetKey) {
-  return SNIPPETS[key].lines.map((l) => l.text).join("\n");
-}
 
 export function CodeSnippets() {
   const [active, setActive] = useState<SnippetKey>("create");
@@ -54,7 +81,7 @@ export function CodeSnippets() {
   const snippetKeys = Object.keys(SNIPPETS) as SnippetKey[];
 
   const copy = async () => {
-    await navigator.clipboard.writeText(toPlainText(active));
+    await navigator.clipboard.writeText(SNIPPETS[active].copyText);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
