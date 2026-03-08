@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 import { authClient } from "@/lib/auth-client";
 
@@ -8,11 +8,11 @@ function AuthButton({ label, variant }: { label: string; variant: "outline" | "s
   const [loading, setLoading] = useState(false);
 
   const base =
-    "inline-flex items-center gap-2 px-4 py-1.5 text-[11px] tracking-[0.18em] uppercase font-mono transition-colors cursor-pointer disabled:opacity-50";
+    "inline-flex items-center gap-2 px-4 py-1.5 text-[11px] tracking-[0.18em] uppercase font-mono transition-all duration-300 cursor-pointer disabled:opacity-50";
   const styles =
     variant === "solid"
-      ? `${base} bg-zinc-100 text-black hover:bg-white border border-zinc-100`
-      : `${base} bg-transparent text-zinc-400 hover:text-zinc-100 border border-zinc-700 hover:border-zinc-500`;
+      ? `${base} bg-zinc-100 text-black hover:bg-white border border-zinc-100 hover:shadow-[0_0_20px_rgba(255,255,255,0.15)]`
+      : `${base} bg-transparent text-zinc-400 hover:text-zinc-100 border border-zinc-700 hover:border-zinc-500 hover:shadow-[0_0_15px_rgba(255,255,255,0.05)]`;
 
   return (
     <button
@@ -87,7 +87,7 @@ const QUICKSTART: TerminalLine[] = [
   { type: "output", text: '{ "status": "ok" }' },
 ];
 
-function TerminalLine({ line }: { line: TerminalLine }) {
+function TerminalLineComponent({ line }: { line: TerminalLine }) {
   if (line.type === "blank") return <div className="h-4" />;
   if (line.type === "comment")
     return <div className="text-xs leading-6 text-zinc-600">{line.text}</div>;
@@ -101,11 +101,83 @@ function TerminalLine({ line }: { line: TerminalLine }) {
   return <div className="text-xs leading-6 text-zinc-500">{line.text}</div>;
 }
 
+function BlinkingCursor() {
+  return (
+    <div className="flex gap-2 text-xs leading-6 mt-1">
+      <span className="shrink-0 text-green-400">$</span>
+      <span className="inline-block w-[7px] h-[14px] bg-green-400/80 animate-[blink_1s_steps(1)_infinite]" />
+    </div>
+  );
+}
+
+function FeatureCard({ f, index }: { f: typeof FEATURES[number]; index: number }) {
+  return (
+    <div
+      className="group relative flex flex-col gap-4 bg-black p-6 transition-all duration-500 hover:bg-zinc-950"
+      style={{ animationDelay: `${index * 100}ms` }}
+    >
+      {/* hover glow */}
+      <div className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-500 group-hover:opacity-100 bg-[radial-gradient(ellipse_at_center,rgba(74,222,128,0.04),transparent_70%)]" />
+
+      <div className="relative flex items-center gap-2">
+        <span className="text-green-400 text-xs transition-all duration-300 group-hover:text-green-300 group-hover:drop-shadow-[0_0_6px_rgba(74,222,128,0.5)]">$</span>
+        <code className="overflow-x-auto whitespace-nowrap text-xs text-zinc-400 transition-colors duration-300 group-hover:text-zinc-300">
+          {f.cmd}
+        </code>
+      </div>
+
+      <div className="relative flex items-center gap-3">
+        <span className="text-sm font-medium text-zinc-100">{f.label}</span>
+        <span className="border border-zinc-800 px-2 py-0.5 text-[9px] tracking-[0.14em] uppercase text-zinc-500 transition-all duration-300 group-hover:border-green-900/50 group-hover:text-green-400/60">
+          {f.badge}
+        </span>
+      </div>
+
+      <p className="relative text-sm leading-6 text-zinc-400">{f.desc}</p>
+    </div>
+  );
+}
+
+function StatusIndicator() {
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    const interval = setInterval(() => setVisible((v) => !v), 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <span className={`text-green-500 transition-opacity duration-1000 ${visible ? "opacity-100" : "opacity-40"}`}>
+      ●
+    </span>
+  );
+}
+
 export function LandingPage() {
   return (
-    <div className="min-h-screen bg-black font-mono text-zinc-300 selection:bg-zinc-700">
+    <div className="relative min-h-screen bg-black font-mono text-zinc-300 selection:bg-green-900/40 selection:text-green-200">
+      {/* ── background grid ───────────────────────────────────── */}
+      <div
+        className="pointer-events-none fixed inset-0 opacity-[0.03]"
+        style={{
+          backgroundImage: `
+            linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)
+          `,
+          backgroundSize: "60px 60px",
+        }}
+      />
+
+      {/* ── scan lines ────────────────────────────────────────── */}
+      <div
+        className="pointer-events-none fixed inset-0 opacity-[0.015]"
+        style={{
+          backgroundImage: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.1) 2px, rgba(255,255,255,0.1) 4px)",
+        }}
+      />
+
       {/* ── nav ─────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-10 border-b border-zinc-900 bg-black/95 backdrop-blur">
+      <header className="sticky top-0 z-10 border-b border-zinc-900 bg-black/90 backdrop-blur-md">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-3">
             <span className="text-zinc-200">▣</span>
@@ -123,8 +195,11 @@ export function LandingPage() {
       </header>
 
       {/* ── hero ────────────────────────────────────────────────── */}
-      <section className="mx-auto max-w-5xl px-6 pb-20 pt-20">
-        <pre className="mb-8 text-[9px] leading-[1.4] text-zinc-600 sm:text-[11px]">{`  ██╗  ██╗ █████╗ ████████╗ ██████╗██╗  ██╗
+      <section className="relative mx-auto max-w-5xl px-6 pb-20 pt-20">
+        {/* glow behind ASCII art */}
+        <div className="pointer-events-none absolute left-1/2 top-16 -translate-x-1/2 h-40 w-[500px] bg-green-500/[0.04] blur-[80px] rounded-full" />
+
+        <pre className="relative mb-8 text-[9px] leading-[1.4] text-zinc-600 sm:text-[11px] drop-shadow-[0_0_30px_rgba(74,222,128,0.06)]">{`  ██╗  ██╗ █████╗ ████████╗ ██████╗██╗  ██╗
   ██║  ██║██╔══██╗╚══██╔══╝██╔════╝██║  ██║
   ███████║███████║   ██║   ██║     ███████║
   ██╔══██║██╔══██║   ██║   ██║     ██╔══██║
@@ -149,9 +224,9 @@ export function LandingPage() {
             href="https://github.com/thakerkush/hatch"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-zinc-500 transition-colors hover:text-zinc-300"
+            className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-zinc-500 transition-colors duration-300 hover:text-zinc-300"
           >
-            <span className="text-zinc-600">▸</span> view on github
+            <span className="text-zinc-600 transition-colors duration-300 hover:text-green-400">▸</span> view on github
           </a>
         </div>
       </section>
@@ -161,24 +236,8 @@ export function LandingPage() {
         <div className="mb-6 text-[10px] tracking-[0.22em] text-zinc-500">── FEATURES</div>
 
         <div className="grid gap-px border border-zinc-900 bg-zinc-900 sm:grid-cols-2">
-          {FEATURES.map((f) => (
-            <div key={f.label} className="flex flex-col gap-4 bg-black p-6">
-              <div className="flex items-center gap-2">
-                <span className="text-green-400 text-xs">$</span>
-                <code className="overflow-x-auto whitespace-nowrap text-xs text-zinc-400">
-                  {f.cmd}
-                </code>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-zinc-100">{f.label}</span>
-                <span className="border border-zinc-800 px-2 py-0.5 text-[9px] tracking-[0.14em] uppercase text-zinc-500">
-                  {f.badge}
-                </span>
-              </div>
-
-              <p className="text-sm leading-6 text-zinc-400">{f.desc}</p>
-            </div>
+          {FEATURES.map((f, i) => (
+            <FeatureCard key={f.label} f={f} index={i} />
           ))}
         </div>
       </section>
@@ -187,29 +246,33 @@ export function LandingPage() {
       <section className="mx-auto max-w-5xl px-6 pb-24">
         <div className="mb-6 text-[10px] tracking-[0.22em] text-zinc-500">── QUICKSTART</div>
 
-        <div className="border border-zinc-800 bg-zinc-950">
+        <div className="group/terminal relative border border-zinc-800 bg-zinc-950 transition-all duration-500 hover:border-zinc-700 hover:shadow-[0_0_40px_rgba(0,0,0,0.5)]">
           {/* title bar */}
           <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-2.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-zinc-700" />
-            <span className="h-2.5 w-2.5 rounded-full bg-zinc-700" />
-            <span className="h-2.5 w-2.5 rounded-full bg-zinc-700" />
+            <span className="h-2.5 w-2.5 rounded-full bg-zinc-700 transition-colors duration-300 group-hover/terminal:bg-red-500/70" />
+            <span className="h-2.5 w-2.5 rounded-full bg-zinc-700 transition-colors duration-300 group-hover/terminal:bg-yellow-500/70" />
+            <span className="h-2.5 w-2.5 rounded-full bg-zinc-700 transition-colors duration-300 group-hover/terminal:bg-green-500/70" />
             <span className="ml-3 text-[10px] tracking-widest text-zinc-600">terminal</span>
           </div>
           <div className="p-5">
             {QUICKSTART.map((line, i) => (
-              <TerminalLine key={i} line={line} />
+              <TerminalLineComponent key={i} line={line} />
             ))}
+            <BlinkingCursor />
           </div>
         </div>
       </section>
 
       {/* ── cta ─────────────────────────────────────────────────── */}
-      <section className="mx-auto max-w-5xl border-t border-zinc-900 px-6 py-20">
-        <p className="mb-2 text-lg text-zinc-100">Ready to spin up your first VM?</p>
-        <p className="mb-8 text-sm text-zinc-400">
+      <section className="relative mx-auto max-w-5xl border-t border-zinc-900 px-6 py-20">
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent via-green-500/[0.01] to-transparent" />
+        <p className="relative mb-2 text-lg text-zinc-100">Ready to spin up your first VM?</p>
+        <p className="relative mb-8 text-sm text-zinc-400">
           Free to start.
         </p>
-        <AuthButton label="create free account →" variant="solid" />
+        <div className="relative">
+          <AuthButton label="create free account →" variant="solid" />
+        </div>
       </section>
 
       {/* ── footer ──────────────────────────────────────────────── */}
@@ -217,10 +280,11 @@ export function LandingPage() {
         <div className="mx-auto flex max-w-5xl items-center justify-between text-[10px] tracking-[0.14em] text-zinc-600">
           <span>© 2026 hatch · hatchvm.com</span>
           <span>
-            <span className="text-green-500">●</span> all systems nominal
+            <StatusIndicator /> all systems nominal
           </span>
         </div>
       </footer>
+
     </div>
   );
 }
