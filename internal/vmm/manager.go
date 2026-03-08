@@ -13,6 +13,7 @@ import (
 	"github.com/ThakerKush/Hatch/internal/config"
 	"github.com/ThakerKush/Hatch/internal/store"
 	"github.com/ThakerKush/Hatch/internal/util"
+	"golang.org/x/crypto/ssh"
 )
 
 // CreateOptions are the parameters accepted when creating a new VM.
@@ -45,6 +46,9 @@ type Manager struct {
 
 	sshMu    sync.Mutex
 	sshPorts map[int]string // host ssh port -> vm id
+
+	caSigner    ssh.Signer // nil when SSH CA is not configured
+	caPublicKey []byte     // raw bytes of the CA public key file
 }
 
 // NewManager creates a Manager backed by the given database.
@@ -80,6 +84,20 @@ func NewManager(cfg config.Config, db *store.DB, s3 *store.S3Client) (*Manager, 
 				m.sshPorts[p] = existingVMs[i].ID
 			}
 		}
+	}
+
+	if cfg.SSHCAEnabled() {
+		signer, err := LoadCA(cfg.SSHCAPrivateKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("load SSH CA: %w", err)
+		}
+		pubKey, err := os.ReadFile(cfg.SSHCAPublicKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("read SSH CA public key: %w", err)
+		}
+		m.caSigner = signer
+		m.caPublicKey = pubKey
+		slog.Info("SSH certificate authority loaded")
 	}
 
 	// On startup, mark any VMs left in a transient state (from a prior crash)
@@ -255,7 +273,7 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 		return nil, fmt.Errorf("create overlay image: %w", err)
 	}
 
-	if err := InjectCloudInitSeed(ctx, overlayPath, vmDir, vmID, macAddr, opts.UserData); err != nil {
+	if err := InjectCloudInitSeed(ctx, overlayPath, vmDir, vmID, macAddr, opts.UserData, m.caPublicKey); err != nil {
 		m.markError(vmID, err)
 		m.cleanupResources(ctx, vm, cleanupOpts{releaseIP: true, removeWorkDir: true})
 		return nil, fmt.Errorf("inject cloud-init seed: %w", err)
@@ -458,6 +476,19 @@ func (m *Manager) cleanupResources(ctx context.Context, vm *store.VM, opts clean
 	if opts.removeWorkDir && vm.WorkDir != "" {
 		_ = os.RemoveAll(vm.WorkDir)
 	}
+}
+
+// SSHCAEnabled returns true when the SSH certificate authority is configured.
+func (m *Manager) SSHCAEnabled() bool {
+	return m.caSigner != nil
+}
+
+// SignSSHCert signs a short-lived SSH user certificate scoped to the given VM.
+func (m *Manager) SignSSHCert(pubKey ssh.PublicKey, vmID string) (*ssh.Certificate, error) {
+	if m.caSigner == nil {
+		return nil, fmt.Errorf("SSH CA is not configured")
+	}
+	return SignCert(m.caSigner, pubKey, vmID, 5*time.Minute)
 }
 
 // Shutdown stops long-running resources owned by the manager (e.g. dnsmasq).

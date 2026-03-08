@@ -3,10 +3,13 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/ThakerKush/Hatch/internal/config"
 	"github.com/ThakerKush/Hatch/internal/store"
 	"github.com/ThakerKush/Hatch/internal/vmm"
+	"golang.org/x/crypto/ssh"
 )
 
 // Server exposes the Hatch REST API.
@@ -429,6 +433,14 @@ func (s *Server) handleVM(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, routes)
 
+	// POST /vms/{id}/connect
+	case r.Method == http.MethodPost && action == "connect":
+		s.handleConnect(w, r, id)
+
+	// POST /vms/{id}/exec
+	case r.Method == http.MethodPost && action == "exec":
+		s.handleExec(w, r, id)
+
 	default:
 		writeError(w, http.StatusNotFound, errNotFound)
 	}
@@ -540,6 +552,177 @@ func (s *Server) handleRouteDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// ──────────────────────────── Connect / Exec ────────────────────────────
+
+func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request, vmID string) {
+	if !s.vmm.SSHCAEnabled() {
+		writeError(w, http.StatusServiceUnavailable, errors.New("SSH CA is not configured"))
+		return
+	}
+
+	vm, err := s.getOwnedVM(r.Context(), vmID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if vm == nil {
+		writeError(w, http.StatusNotFound, errNotFound)
+		return
+	}
+	if vm.State != store.VMStateRunning {
+		writeError(w, http.StatusConflict, fmt.Errorf("vm is %s, must be running", vm.State))
+		return
+	}
+	if vm.SSHPort <= 0 {
+		writeError(w, http.StatusConflict, errors.New("vm has no SSH port (network not enabled)"))
+		return
+	}
+
+	var req connectRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.PublicKey) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("public_key is required"))
+		return
+	}
+
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(req.PublicKey))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid public key: %w", err))
+		return
+	}
+
+	cert, err := s.vmm.SignSSHCert(pubKey, vm.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("sign certificate: %w", err))
+		return
+	}
+
+	host := s.cfg.HTTPAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+
+	writeJSON(w, http.StatusOK, connectResponse{
+		Certificate: string(ssh.MarshalAuthorizedKey(cert)),
+		Host:        host,
+		Port:        vm.SSHPort,
+		Username:    "agent",
+		ValidUntil:  int64(cert.ValidBefore),
+	})
+}
+
+func (s *Server) handleExec(w http.ResponseWriter, r *http.Request, vmID string) {
+	if !s.vmm.SSHCAEnabled() {
+		writeError(w, http.StatusServiceUnavailable, errors.New("SSH CA is not configured"))
+		return
+	}
+
+	vm, err := s.getOwnedVM(r.Context(), vmID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if vm == nil {
+		writeError(w, http.StatusNotFound, errNotFound)
+		return
+	}
+	if vm.State != store.VMStateRunning {
+		writeError(w, http.StatusConflict, fmt.Errorf("vm is %s, must be running", vm.State))
+		return
+	}
+	if vm.GuestIP == "" {
+		writeError(w, http.StatusConflict, errors.New("vm has no guest IP (network not enabled)"))
+		return
+	}
+
+	var req execRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.Command) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("command is required"))
+		return
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("generate ephemeral key: %w", err))
+		return
+	}
+
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("convert public key: %w", err))
+		return
+	}
+
+	cert, err := s.vmm.SignSSHCert(sshPub, vm.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("sign certificate: %w", err))
+		return
+	}
+
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("create signer: %w", err))
+		return
+	}
+	certSigner, err := ssh.NewCertSigner(cert, signer)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("create cert signer: %w", err))
+		return
+	}
+
+	clientCfg := &ssh.ClientConfig{
+		User:            "agent",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(certSigner)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         10 * time.Second,
+	}
+
+	addr := net.JoinHostPort(vm.GuestIP, "22")
+	client, err := ssh.Dial("tcp", addr, clientCfg)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("ssh connect to vm: %w", err))
+		return
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("ssh session: %w", err))
+		return
+	}
+	defer session.Close()
+
+	var stdout, stderr bytes.Buffer
+	session.Stdout = &stdout
+	session.Stderr = &stderr
+
+	exitCode := 0
+	if err := session.Run(req.Command); err != nil {
+		if exitErr, ok := err.(*ssh.ExitError); ok {
+			exitCode = exitErr.ExitStatus()
+		} else {
+			writeError(w, http.StatusBadGateway, fmt.Errorf("exec command: %w", err))
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, execResponse{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: exitCode,
+	})
 }
 
 // ──────────────────────────── Helpers ────────────────────────────

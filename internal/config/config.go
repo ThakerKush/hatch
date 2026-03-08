@@ -44,6 +44,10 @@ type Config struct {
 	SSHPortMax     int
 	SSHAllowedCIDR string
 
+	// SSH Certificate Authority for platform-level VM access.
+	SSHCAPrivateKeyPath string
+	SSHCAPublicKeyPath  string
+
 	// S3 snapshot storage
 	S3Endpoint  string
 	S3Bucket    string
@@ -100,6 +104,10 @@ func LoadFromEnv() Config {
 		SSHPortMax:     envOrDefaultInt("HATCH_SSH_PORT_MAX", 26000),
 		SSHAllowedCIDR: envOrDefault("HATCH_SSH_ALLOWED_CIDR", "127.0.0.1/32"),
 
+		// SSH CA
+		SSHCAPrivateKeyPath: envOrDefault("HATCH_SSH_CA_PRIVATE_KEY_PATH", ""),
+		SSHCAPublicKeyPath:  envOrDefault("HATCH_SSH_CA_PUBLIC_KEY_PATH", ""),
+
 		// S3
 		S3Endpoint:  envOrDefault("HATCH_S3_ENDPOINT", ""),
 		S3Bucket:    envOrDefault("HATCH_S3_BUCKET", ""),
@@ -121,6 +129,11 @@ func (c Config) S3Enabled() bool {
 // DefaultImageConfigured returns true when a default kernel and rootfs are set.
 func (c Config) DefaultImageConfigured() bool {
 	return c.DefaultKernelPath != "" && c.DefaultRootfsPath != ""
+}
+
+// SSHCAEnabled returns true when both CA key paths are configured.
+func (c Config) SSHCAEnabled() bool {
+	return c.SSHCAPrivateKeyPath != "" && c.SSHCAPublicKeyPath != ""
 }
 
 // DefaultImageID is the well-known ID used for the auto-seeded default image.

@@ -3,6 +3,8 @@ import { nextCookies } from "better-auth/next-js";
 import config from "@/config";
 import { pool } from "@/lib/db";
 import { apiKey } from "@better-auth/api-key";
+import { jwt } from "better-auth/plugins";
+import { oauthProvider } from "@better-auth/oauth-provider"; 
 
 export const auth = betterAuth({
   baseURL: config.auth.baseURL,
@@ -32,7 +34,9 @@ export const auth = betterAuth({
       rateLimit: {
         enabled: false,
       },
-    }),
+    }, 
+),
     nextCookies(),
+    jwt(),
   ],
 });

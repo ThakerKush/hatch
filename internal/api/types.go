@@ -166,6 +166,32 @@ func (r createTemplateRequest) ToTemplate(cfg config.Config) store.Template {
 	}
 }
 
+// --- Connect (SSH certificate signing) ---
+
+type connectRequest struct {
+	PublicKey string `json:"public_key"`
+}
+
+type connectResponse struct {
+	Certificate string `json:"certificate"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Username    string `json:"username"`
+	ValidUntil  int64  `json:"valid_until"`
+}
+
+// --- Exec (run command in VM via SSH) ---
+
+type execRequest struct {
+	Command string `json:"command"`
+}
+
+type execResponse struct {
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exit_code"`
+}
+
 // --- Proxy Route ---
 
 var (
