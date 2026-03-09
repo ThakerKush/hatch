@@ -89,3 +89,11 @@ firecracker/
 
 # Environment secrets
 .env
+
+# Node
+node_modules/
+
+# SDK build output
+sdk/dist/
+
+sdk-test

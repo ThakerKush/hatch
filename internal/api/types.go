@@ -183,13 +183,20 @@ type connectResponse struct {
 // --- Exec (run command in VM via SSH) ---
 
 type execRequest struct {
-	Command string `json:"command"`
+	Command    string `json:"command"`
+	TimeoutMs  int    `json:"timeout_ms,omitempty"`
+	Background bool   `json:"background,omitempty"`
 }
+
+const defaultExecTimeoutMs = 10_000
 
 type execResponse struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
 	ExitCode int    `json:"exit_code"`
+	TimedOut bool   `json:"timed_out"`
+	PID      int    `json:"pid,omitempty"`
+	LogFile  string `json:"log_file,omitempty"`
 }
 
 // --- Proxy Route ---

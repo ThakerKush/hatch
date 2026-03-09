@@ -11,11 +11,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ThakerKush/Hatch/internal/config"
 	"github.com/ThakerKush/Hatch/internal/store"
+	"github.com/ThakerKush/Hatch/internal/util"
 	"github.com/ThakerKush/Hatch/internal/vmm"
 	"golang.org/x/crypto/ssh"
 )
@@ -653,6 +655,12 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request, vmID string)
 		return
 	}
 
+	timeoutMs := req.TimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = defaultExecTimeoutMs
+	}
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("generate ephemeral key: %w", err))
@@ -704,25 +712,128 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request, vmID string)
 	}
 	defer session.Close()
 
-	var stdout, stderr bytes.Buffer
-	session.Stdout = &stdout
-	session.Stderr = &stderr
+	execID := util.RandomID("")[:12]
+	logFile := fmt.Sprintf("/tmp/hatch-exec-%s.log", execID)
 
-	exitCode := 0
-	if err := session.Run(req.Command); err != nil {
-		if exitErr, ok := err.(*ssh.ExitError); ok {
-			exitCode = exitErr.ExitStatus()
-		} else {
-			writeError(w, http.StatusBadGateway, fmt.Errorf("exec command: %w", err))
+	// ── Background mode: start process, return PID immediately ──
+	if req.Background {
+		bgCmd := fmt.Sprintf(
+			`nohup sh -c %s >%s 2>&1 </dev/null & echo $!`,
+			shellQuote(req.Command), logFile,
+		)
+
+		var stdout bytes.Buffer
+		session.Stdout = &stdout
+
+		if err := session.Run(bgCmd); err != nil {
+			writeError(w, http.StatusBadGateway, fmt.Errorf("exec background command: %w", err))
 			return
+		}
+
+		pid, _ := strconv.Atoi(strings.TrimSpace(stdout.String()))
+
+		writeJSON(w, http.StatusOK, execResponse{
+			PID:     pid,
+			LogFile: logFile,
+		})
+		return
+	}
+
+	// ── Foreground mode: run with timeout ──
+
+	// Wrap the command so that:
+	// 1. It runs under nohup (survives SIGHUP when SSH session closes)
+	// 2. Output goes to a log file (survives broken pipe)
+	// 3. PID is echoed on the first line for tracking
+	// 4. tail streams the log back through the session for partial output
+	// 5. Exit code is reported on the last line
+	wrapped := fmt.Sprintf(
+		`nohup sh -c %s >%s 2>&1 </dev/null & _P=$!; echo "$_P"; tail --pid="$_P" -f -n +1 %s 2>/dev/null; wait "$_P" 2>/dev/null; echo "HATCH_EXIT:$?"`,
+		shellQuote(req.Command), logFile, logFile,
+	)
+
+	var stdout bytes.Buffer
+	session.Stdout = &stdout
+
+	if err := session.Start(wrapped); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("exec command: %w", err))
+		return
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- session.Wait() }()
+
+	timedOut := false
+
+	select {
+	case <-done:
+		// Command finished within timeout.
+	case <-time.After(timeout):
+		timedOut = true
+		// Close the session — kills tail, but nohup process keeps running.
+		_ = session.Close()
+	}
+
+	pid, exitCode, output := parseExecOutput(stdout.String(), timedOut)
+
+	resp := execResponse{
+		Stdout:   output,
+		Stderr:   "",
+		ExitCode: exitCode,
+		TimedOut: timedOut,
+	}
+	if timedOut {
+		resp.PID = pid
+		resp.LogFile = logFile
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// parseExecOutput extracts PID, exit code, and clean output from the wrapped command.
+// Stdout format: "<PID>\n<command output>\nHATCH_EXIT:<code>\n"
+func parseExecOutput(raw string, timedOut bool) (pid int, exitCode int, output string) {
+	lines := strings.Split(raw, "\n")
+
+	startIdx := 0
+	endIdx := len(lines)
+
+	// First line is the PID.
+	if len(lines) > 0 {
+		if p, err := strconv.Atoi(strings.TrimSpace(lines[0])); err == nil {
+			pid = p
+			startIdx = 1
 		}
 	}
 
-	writeJSON(w, http.StatusOK, execResponse{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-	})
+	if !timedOut {
+		// Last non-empty line is HATCH_EXIT:<code>.
+		for i := len(lines) - 1; i >= startIdx; i-- {
+			trimmed := strings.TrimSpace(lines[i])
+			if trimmed == "" {
+				continue
+			}
+			if after, ok := strings.CutPrefix(trimmed, "HATCH_EXIT:"); ok {
+				if code, err := strconv.Atoi(after); err == nil {
+					exitCode = code
+					endIdx = i
+				}
+			}
+			break
+		}
+	} else {
+		exitCode = -1
+	}
+
+	if startIdx < endIdx {
+		output = strings.Join(lines[startIdx:endIdx], "\n")
+	}
+	return
+}
+
+// shellQuote wraps s in single quotes, escaping any embedded single quotes.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // ──────────────────────────── Helpers ────────────────────────────
