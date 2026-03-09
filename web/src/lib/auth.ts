@@ -37,6 +37,6 @@ export const auth = betterAuth({
     }, 
 ),
     nextCookies(),
-    jwt(),
+    // jwt(),
   ],
 });
