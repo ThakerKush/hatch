@@ -317,12 +317,36 @@ func (m *Manager) CreateAndStart(ctx context.Context, opts CreateOptions) (*stor
 	m.machines[vmID] = machine
 	m.mu.Unlock()
 
+	// Wait for SSH to become reachable before marking the VM as running.
+	// This ensures the SDK can immediately exec commands after createVM returns.
+	if guestIP != "" {
+		slog.Info("waiting for ssh", "id", vmID, "ip", guestIP)
+		if err := waitForSSH(guestIP, 30*time.Second); err != nil {
+			slog.Warn("ssh not reachable within timeout, marking running anyway", "id", vmID, "error", err)
+		}
+	}
+
 	vm.State = store.VMStateRunning
 	vm.UpdatedAt = time.Now().UTC()
 	_ = m.db.UpdateVMState(vmID, store.VMStateRunning)
 
 	slog.Info("vm started", "id", vmID, "ip", guestIP)
 	return vm, nil
+}
+
+// waitForSSH polls TCP port 22 on the guest until it accepts a connection.
+func waitForSSH(guestIP string, timeout time.Duration) error {
+	addr := net.JoinHostPort(guestIP, "22")
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 1*time.Second)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("ssh not reachable at %s after %s", addr, timeout)
 }
 
 // ---------- Stop ----------

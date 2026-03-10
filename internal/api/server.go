@@ -700,7 +700,8 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request, vmID string)
 	addr := net.JoinHostPort(vm.GuestIP, "22")
 	client, err := ssh.Dial("tcp", addr, clientCfg)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Errorf("ssh connect to vm: %w", err))
+		slog.Warn("ssh dial failed", "vm", vmID, "addr", addr, "error", err)
+		writeError(w, http.StatusServiceUnavailable, errors.New("vm is not reachable yet, try again shortly"))
 		return
 	}
 	defer client.Close()
