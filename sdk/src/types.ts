@@ -10,16 +10,9 @@ export interface VM {
   id: string;
   image_id: string;
   template_id?: string;
-  user_id?: string;
   state: VMState;
   vcpu_count: number;
   mem_mib: number;
-  guest_ip?: string;
-  guest_mac?: string;
-  tap_name?: string;
-  ssh_port?: number;
-  socket_path?: string;
-  user_data?: string;
   enable_network: boolean;
   created_at: string;
   updated_at: string;
